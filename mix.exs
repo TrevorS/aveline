@@ -33,6 +33,7 @@ defmodule Aveline.MixProject do
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix_live_reload, "~> 1.6", only: :dev},
       {:ecto_sql, "~> 3.12"},
+      {:explorer, "~> 0.12"},
       {:postgrex, ">= 0.0.0"},
       {:myxql, "~> 0.7"},
       {:cloak_ecto, "~> 1.3"},

@@ -113,12 +113,16 @@ defmodule Aveline.DataSources do
 
       true ->
         with {:ok, adapter} <- validate_template_or_invalid(template) do
-          insert_next_version(current, %{
-            name: Map.get(changes, :name, current.name),
-            adapter: adapter,
-            url_template: template,
-            password: Map.get(changes, :password, current.password)
-          }, user_id)
+          insert_next_version(
+            current,
+            %{
+              name: Map.get(changes, :name, current.name),
+              adapter: adapter,
+              url_template: template,
+              password: Map.get(changes, :password, current.password)
+            },
+            user_id
+          )
         end
     end
   end

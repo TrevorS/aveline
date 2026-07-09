@@ -54,6 +54,7 @@ defmodule AvelineWeb.Router do
     live "/w/:slug/v/:view_name", WorkspaceShowLive, :view
     live "/w/:slug/d/:doc_slug", DocShowLive, :show
     live "/w/:slug/d/:doc_slug/v/:version", DocShowLive, :show_version
+    live "/w/:slug/nb/:doc_slug", DocShowLive, :show
     live "/w/:slug/activity", ActivityLive, :index
     live "/w/:slug/usage", UsageLive, :index
     live "/w/:slug/data-sources", DataSourcesLive, :index
@@ -97,6 +98,10 @@ defmodule AvelineWeb.Router do
     # Home-page pin slots
     post "/docs/:doc_slug/pin", DocController, :pin
     delete "/docs/:doc_slug/pin", DocController, :unpin
+
+    # Notebook cell runs
+    post "/docs/:doc_slug/cells/:block_id/run", CellRunController, :run
+    get "/docs/:doc_slug/cells/:block_id/runs", CellRunController, :index
 
     # Doc versions
     get "/docs/:doc_slug/versions", VersionController, :index

@@ -75,6 +75,7 @@ the next free decade; cases inside a file should share a theme.
 | [`260_scale.sh`](cases/260_scale.sh) | Scale | 30-block doc, 10 versions, 15 comments, 25 docs, 10 ops in one call |
 | [`270_auth_edges.sh`](cases/270_auth_edges.sh) | Auth header edges | lowercase `bearer` accepted, unknown token → 401, missing header → 401, wrong scheme → 401, heartbeat fields, whoami workspaces array |
 | [`280_list_ordering.sh`](cases/280_list_ordering.sh) | List ordering | docs pinned-first, recent-first among unpinned, versions newest-first, events newest-first, tags include doc_count |
+| [`350_notebooks.sh`](cases/350_notebooks.sh) | Notebooks + cell runs | agent flow via `create-doc --kind notebook` / `run-cell` / `list-runs`: captured outputs + provenance, outputs never on blocks, refusals (`not_notebook`, `cell_not_found`, `invalid_actor`) record nothing, unrun upstream is an error RUN. **Needs the CLI release with the notebook verbs.** |
 
 > Total cases: **481** as of this commit. Add to this table whenever you
 > add a case file — the table is the source of truth for what we believe

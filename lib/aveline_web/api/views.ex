@@ -59,6 +59,7 @@ defmodule AvelineWeb.Api.Views do
       "tags" => d.tags || [],
       "pin_slot" => d.pin_slot,
       "orientation" => d.orientation,
+      "kind" => d.kind,
       "version_number" => d.version_number,
       "owner" => user(preload(d, :owner)),
       "updated_at" => iso(d.updated_at)
@@ -110,6 +111,32 @@ defmodule AvelineWeb.Api.Views do
       "deleted_at" => iso(c.deleted_at),
       "deleted_by" => user(preload(c, :deleted_by)),
       "created_at" => iso(c.inserted_at)
+    }
+  end
+
+  # ===== Cell run =====
+
+  def cell_run(%Aveline.Runs.CellRun{} = r) do
+    %{
+      "id" => r.id,
+      "block_id" => r.block_id,
+      "doc_version_id" => r.doc_version_id,
+      "doc_version_number" =>
+        case preload(r, :doc_version) do
+          nil -> nil
+          d -> d.version_number
+        end,
+      "snapshot_hash" => r.snapshot_hash,
+      "status" => r.status,
+      "outputs" => r.outputs || %{},
+      "stdout" => r.stdout,
+      "truncated" => r.truncated,
+      "duration_ms" => r.duration_ms,
+      "actor" => %{
+        "type" => r.actor_type,
+        "user" => user(preload(r, :actor_user))
+      },
+      "inserted_at" => iso(r.inserted_at)
     }
   end
 

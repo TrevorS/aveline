@@ -7,7 +7,9 @@ defmodule Aveline.DataSources.Runner do
   Safety posture (all adapters):
     * one statement per call (the drivers reject multi-statement)
     * #{5} second query timeout, #{5} second connect timeout
-    * rows capped at 1000 (result carries `"truncated" => true`)
+    * rows capped at 1000 by default (result carries `"truncated" =>
+      true`); callers with a bigger appetite pass `row_cap:` — frame
+      cells fetch up to 50k rows into the executor
     * a fresh connection per call, closed in `after` — no pooled
       credentials lingering; the 60s cache keeps call volume low
     * TLS honored from the template's sslmode/ssl params
@@ -31,7 +33,11 @@ defmodule Aveline.DataSources.Runner do
   # Hard ceiling on one run: connect + query + margin.
   @task_timeout_ms 12_000
 
-  def run(%{adapter: adapter, password: password} = ds, sql) when is_binary(password) do
+  def run(ds, sql, opts \\ [])
+
+  def run(%{adapter: adapter, password: password} = ds, sql, opts) when is_binary(password) do
+    row_cap = Keyword.get(opts, :row_cap, @row_cap)
+
     # Ecto's URL parser doesn't care about the scheme, but normalize
     # protocol-cousin schemes anyway so nothing downstream trips.
     url =
@@ -47,10 +53,10 @@ defmodule Aveline.DataSources.Runner do
     task =
       Task.Supervisor.async_nolink(Aveline.TaskSupervisor, fn ->
         case adapter do
-          "postgres" -> run_postgres(url, sql)
+          "postgres" -> run_postgres(url, sql, row_cap)
           # Redshift speaks the Postgres wire protocol.
-          "redshift" -> run_postgres(url, sql)
-          "mysql" -> run_mysql(url, sql)
+          "redshift" -> run_postgres(url, sql, row_cap)
+          "mysql" -> run_mysql(url, sql, row_cap)
           _ -> {:error, "unsupported adapter"}
         end
       end)
@@ -71,7 +77,7 @@ defmodule Aveline.DataSources.Runner do
     end
   end
 
-  def run(_, _), do: {:error, "data source has no live credential"}
+  def run(_, _, _), do: {:error, "data source has no live credential"}
 
   # The task dies with whatever killed the linked connection process —
   # usually a DBConnection/driver exception carrying the real story
@@ -84,7 +90,7 @@ defmodule Aveline.DataSources.Runner do
 
   # ===== postgres =====
 
-  defp run_postgres(url, sql) do
+  defp run_postgres(url, sql, row_cap) do
     {url, ssl} = Aveline.DataSources.TLS.split(url)
 
     opts =
@@ -105,7 +111,7 @@ defmodule Aveline.DataSources.Runner do
         try do
           case Postgrex.query(pid, sql, [], timeout: @query_timeout_ms) do
             {:ok, %Postgrex.Result{columns: cols, rows: rows}} ->
-              {:ok, shape(cols, rows)}
+              {:ok, shape(cols, rows, row_cap)}
 
             {:error, %Postgrex.Error{postgres: %{message: msg}}} ->
               {:error, "query failed: #{msg}"}
@@ -129,7 +135,7 @@ defmodule Aveline.DataSources.Runner do
 
   # ===== mysql =====
 
-  defp run_mysql(url, sql) do
+  defp run_mysql(url, sql, row_cap) do
     {url, ssl} = Aveline.DataSources.TLS.split(url)
 
     opts =
@@ -149,7 +155,7 @@ defmodule Aveline.DataSources.Runner do
         try do
           case MyXQL.query(pid, sql, [], timeout: @query_timeout_ms) do
             {:ok, %MyXQL.Result{columns: cols, rows: rows}} ->
-              {:ok, shape(cols, rows)}
+              {:ok, shape(cols, rows, row_cap)}
 
             {:error, %MyXQL.Error{message: msg}} ->
               {:error, "query failed: #{msg}"}
@@ -201,10 +207,10 @@ defmodule Aveline.DataSources.Runner do
 
   # ===== shared =====
 
-  defp shape(cols, rows) do
+  defp shape(cols, rows, row_cap) do
     rows = rows || []
-    truncated? = length(rows) > @row_cap
-    rows = rows |> Enum.take(@row_cap) |> Enum.map(fn row -> Enum.map(row, &json_safe/1) end)
+    truncated? = length(rows) > row_cap
+    rows = rows |> Enum.take(row_cap) |> Enum.map(fn row -> Enum.map(row, &json_safe/1) end)
 
     out = %{"columns" => cols || [], "rows" => rows}
     if truncated?, do: Map.put(out, "truncated", true), else: out
@@ -216,9 +222,11 @@ defmodule Aveline.DataSources.Runner do
   defp json_safe(%Date{} = d), do: Date.to_iso8601(d)
   defp json_safe(%Time{} = t), do: Time.to_iso8601(t)
   defp json_safe(%Decimal{} = d), do: Decimal.to_float(d)
+
   defp json_safe(v) when is_binary(v) do
     if String.valid?(v), do: v, else: Base.encode64(v)
   end
+
   defp json_safe(v) when is_number(v) or is_boolean(v) or is_nil(v), do: v
   defp json_safe(v), do: inspect(v)
 end

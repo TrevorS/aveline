@@ -7,6 +7,7 @@ defmodule AvelineWeb.DocShowLive do
   alias Aveline.DocViews
   alias Aveline.Comments
   alias Aveline.Kudos
+  alias Aveline.Runs
   alias Aveline.Workspaces
   alias AvelineWeb.LiveSession
 
@@ -39,6 +40,7 @@ defmodule AvelineWeb.DocShowLive do
               |> Aveline.Tags.list_for_workspace()
               |> Enum.reject(&is_nil(&1.color))
               |> Map.new(&{&1.slug, &1.color})
+
             versions = Docs.list_versions(current_doc.base_doc_id)
 
             # Optional time-travel — `:version` param means we're showing a
@@ -75,13 +77,15 @@ defmodule AvelineWeb.DocShowLive do
                 )
               end
 
+            {cell_runs, cell_staleness} = load_cell_runs(current_doc)
+
             {:ok,
              assign(socket,
                page_title: "Aveline · #{current_doc.title}",
                current_user: user,
                workspace: ws,
                sidebar_workspaces: Workspaces.list_for_user(user.id),
-           sidebar_views: Aveline.Views.list_pinned(ws.id),
+               sidebar_views: Aveline.Views.list_pinned(ws.id),
                total_count: length(all_items),
                topbar_title: current_doc.title,
                # `current_doc` is always the latest (for nav, switcher,
@@ -108,7 +112,19 @@ defmodule AvelineWeb.DocShowLive do
                expanded_threads: MapSet.new(),
                kudos_count: Kudos.count_for_base(current_doc.base_doc_id),
                kudos_given?: user && Kudos.given_by?(current_doc.base_doc_id, user.id),
-               view_count: DocViews.count_for_base(current_doc.base_doc_id)
+               view_count: DocViews.count_for_base(current_doc.base_doc_id),
+               # Notebook cells: latest captured run per cell + derived
+               # staleness. Rendering never executes anything. Code
+               # cells additionally gate their run button on deploy
+               # mode — frames run everywhere.
+               cell_runs: cell_runs,
+               cell_staleness: cell_staleness,
+               running_cells: MapSet.new(),
+               # Failsafe expiry timers per running cell (not rendered):
+               # if the runner dies mid-run its run never records and no
+               # :cell_run_finished follows, so the flag must not stick.
+               running_timers: %{},
+               code_exec?: Aveline.Config.local_mode?()
              )}
         end
 
@@ -119,6 +135,13 @@ defmodule AvelineWeb.DocShowLive do
         {:ok, socket |> put_flash(:error, "Forbidden.") |> push_navigate(to: ~p"/")}
     end
   end
+
+  defp load_cell_runs(%{kind: "notebook"} = doc) do
+    latest = Runs.latest_per_cell(doc.base_doc_id)
+    {latest, Runs.staleness(doc, latest)}
+  end
+
+  defp load_cell_runs(_doc), do: {%{}, %{}}
 
   defp resolve_version(nil, _versions, current), do: {:ok, current}
   defp resolve_version("", _versions, current), do: {:ok, current}
@@ -308,6 +331,37 @@ defmodule AvelineWeb.DocShowLive do
     end
   end
 
+  # Historical views are read-only for runs too — the run always
+  # executes the CURRENT version's cell.
+  def handle_event("run_cell", _params, %{assigns: %{historical?: true}} = socket),
+    do: {:noreply, socket}
+
+  def handle_event("run_cell", %{"block-id" => block_id}, socket) do
+    %{current_user: user, current_doc: current_doc, running_cells: running} = socket.assigns
+
+    cond do
+      user == nil ->
+        {:noreply, put_flash(socket, :error, "Sign in to run cells.")}
+
+      MapSet.member?(running, block_id) ->
+        {:noreply, socket}
+
+      true ->
+        # Off-process — a cold run can hold the executor for many
+        # seconds and the socket must keep serving events meanwhile.
+        # `running_cells` is set optimistically here because the
+        # :cell_run_started broadcast can only be processed after this
+        # handler returns; completion assigns arrive via the
+        # :cell_run_finished broadcast.
+        {:noreply,
+         socket
+         |> mark_running(block_id)
+         |> start_async({:run_cell, block_id}, fn ->
+           Runs.run_cell(current_doc, block_id, %{user_id: user.id, type: "human"})
+         end)}
+    end
+  end
+
   def handle_event("toggle_kudos", _, socket) do
     %{current_user: user, workspace: ws, current_doc: current_doc} = socket.assigns
 
@@ -416,29 +470,110 @@ defmodule AvelineWeb.DocShowLive do
         else
           %{
             new_current
-            | blocks:
-                Docs.enrich_blocks(new_current.blocks || [], new_current.workspace_id)
+            | blocks: Docs.enrich_blocks(new_current.blocks || [], new_current.workspace_id)
           }
         end
+
+      # An edit can restructure the frame graph — re-derive staleness
+      # against the new version's sources.
+      {cell_runs, cell_staleness} = load_cell_runs(new_current)
 
       {:noreply,
        assign(socket,
          current_doc: new_current,
          item: item,
          topbar_title: new_current.title,
-         versions: versions
+         versions: versions,
+         cell_runs: cell_runs,
+         cell_staleness: cell_staleness
        )}
     else
       {:noreply, socket}
     end
   end
 
+  def handle_info({:cell_run_started, %{base_doc_id: base, block_id: block_id}}, socket) do
+    if base == socket.assigns.current_doc.base_doc_id do
+      {:noreply, mark_running(socket, block_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # `run: nil` means the run never recorded (insert failure) — clear
+  # the running flag but keep the previously captured run on screen.
+  def handle_info({:cell_run_finished, %{base_doc_id: base, block_id: block_id, run: run}}, socket) do
+    if base == socket.assigns.current_doc.base_doc_id do
+      socket = clear_running(socket, block_id)
+
+      socket =
+        if run do
+          cell_runs = Map.put(socket.assigns.cell_runs, block_id, run)
+
+          assign(socket,
+            cell_runs: cell_runs,
+            cell_staleness: Runs.staleness(socket.assigns.current_doc, cell_runs)
+          )
+        else
+          socket
+        end
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # The failsafe fired: the runner died mid-run (its LiveView
+  # disconnected, killing the start_async task), so no terminal
+  # broadcast is coming. Re-enable the run button; a legitimate run
+  # outlasting the horizon just re-enables it a little early.
+  def handle_info({:expire_running_cell, block_id}, socket) do
+    {:noreply, clear_running(socket, block_id)}
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
+
+  # Past every executor ceiling: peer node boot (30s) + eval (10s),
+  # frame query + reduce, plus margin.
+  @running_cell_expiry_ms 60_000
+
+  defp mark_running(socket, block_id) do
+    timers = socket.assigns.running_timers
+    if old = timers[block_id], do: Process.cancel_timer(old)
+    timer = Process.send_after(self(), {:expire_running_cell, block_id}, @running_cell_expiry_ms)
+
+    assign(socket,
+      running_cells: MapSet.put(socket.assigns.running_cells, block_id),
+      running_timers: Map.put(timers, block_id, timer)
+    )
+  end
+
+  defp clear_running(socket, block_id) do
+    if timer = socket.assigns.running_timers[block_id], do: Process.cancel_timer(timer)
+
+    assign(socket,
+      running_cells: MapSet.delete(socket.assigns.running_cells, block_id),
+      running_timers: Map.delete(socket.assigns.running_timers, block_id)
+    )
+  end
+
+  # A recorded run (ok or error status) clears `running_cells` via the
+  # :cell_run_finished broadcast; refusals and crashes never broadcast,
+  # so they clear the optimistic flag here.
+  @impl true
+  def handle_async({:run_cell, _block_id}, {:ok, {:ok, _run}}, socket), do: {:noreply, socket}
+
+  def handle_async({:run_cell, block_id}, _refusal_or_exit, socket) do
+    {:noreply,
+     socket
+     |> clear_running(block_id)
+     |> put_flash(:error, "Could not run this cell.")}
+  end
 
   defp message_actor(%{actor_user: %Ecto.Association.NotLoaded{}}), do: nil
   defp message_actor(%{actor_user: a}), do: a
   defp message_actor(_), do: nil
-
 
   @impl true
   def render(assigns) do
@@ -505,6 +640,7 @@ defmodule AvelineWeb.DocShowLive do
               </button>
             </span>
             <h1 class="article-title">{@item.title}</h1>
+            <span :if={@item.kind == "notebook"} class="chip" title="This doc is a notebook">notebook</span>
             <%= if @current_user && @current_user.id != @current_doc.owner_id do %>
               <button
                 type="button"
@@ -713,7 +849,16 @@ defmodule AvelineWeb.DocShowLive do
         <article class="prose">
           <div class="blocks">
             <%= for b <- @item.blocks || [] do %>
-              <AvelineWeb.BlockRenderer.block block={b} ws_slug={@workspace.slug} tag_colors={@tag_colors} />
+              <AvelineWeb.BlockRenderer.block
+                block={b}
+                ws_slug={@workspace.slug}
+                tag_colors={@tag_colors}
+                cell_run={Map.get(@cell_runs, b["id"])}
+                cell_state={Map.get(@cell_staleness, b["id"])}
+                cell_running?={MapSet.member?(@running_cells, b["id"])}
+                can_run?={@current_user != nil and not @historical?}
+                exec_enabled?={@code_exec?}
+              />
               <.block_comment_zone
                 block_id={b["id"]}
                 threads={Map.get(@threads_by_block, b["id"], [])}

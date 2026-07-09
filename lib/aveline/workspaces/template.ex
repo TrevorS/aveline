@@ -68,11 +68,7 @@ defmodule Aveline.Workspaces.Template do
       h2("What this workspace is for"),
       para(t("(Fill in: one or two lines on what this team builds and what knowledge belongs here.)")),
       h2("Read these first"),
-      para(
-        t(
-          "(Link the docs every newcomer should read, in order. Agents: fetch each with get-doc.)"
-        )
-      ),
+      para(t("(Link the docs every newcomer should read, in order. Agents: fetch each with get-doc.)")),
       h2("How we organize knowledge"),
       ul([
         [

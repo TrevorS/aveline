@@ -15,6 +15,9 @@ services:
     env_file: .env
     environment:
       ERL_INETRC: /app/erl_inetrc
+      # Single-user local mode: first boot seeds a user + API token, printed
+      # once in the app logs. Unset or empty in .env = cloud behavior.
+      DEPLOY_MODE: ${DEPLOY_MODE:-}
     volumes:
       - ./erl_inetrc:/app/erl_inetrc:ro
     ports:

@@ -1133,6 +1133,50 @@
         padding: 10px 14px; border: 1px dashed var(--danger);
         border-radius: var(--radius); font-size: 13px; color: var(--danger);
       }
+      /* frame block — a notebook cell: name badge + staleness badge +
+         run button over the captured output. Same quiet-error posture
+         as charts; rendering never executes anything. */
+      .blocks .blk-frame { margin: 4px 0; }
+      .blocks .frame-header {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+      }
+      .blocks .frame-name { font-family: 'JetBrains Mono', monospace; }
+      .blocks .frame-badge-stale { color: var(--warning, #d29922); border-color: currentColor; }
+      .blocks .frame-badge-never { color: var(--text-muted); }
+      .blocks .frame-badge-error { color: var(--danger); border-color: currentColor; }
+      .blocks .frame-run-btn {
+        margin-left: auto;
+        font: inherit; font-size: 10.5px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.05em;
+        color: var(--text-secondary); background: none;
+        border: 1px solid var(--border-strong, var(--border));
+        border-radius: 4px; padding: 2px 10px; cursor: pointer;
+      }
+      .blocks .frame-run-btn:hover { color: var(--text); border-color: var(--accent); }
+      .blocks .frame-run-btn:disabled { opacity: 0.5; cursor: default; }
+      .blocks .frame-empty {
+        padding: 10px 14px; border: 1px dashed var(--border-strong, var(--border));
+        border-radius: var(--radius); font-size: 12.5px; color: var(--text-muted);
+      }
+      /* code cell — an elixir code block in a notebook: source over
+         captured stdout/result panes. Execution is deploy-mode gated;
+         the quiet disabled note keeps shared notebooks readable. */
+      .blocks .blk-code-cell { margin: 4px 0; }
+      .blocks .cell-exec-disabled {
+        margin-left: auto; font-size: 11px; font-style: italic;
+        color: var(--text-muted);
+      }
+      .blocks .cell-pane { margin: 6px 0; }
+      .blocks .cell-pane-label {
+        font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 2px;
+      }
+      .blocks .cell-pane-pre {
+        margin: 0; padding: 10px 14px; overflow-x: auto; white-space: pre-wrap;
+        background: var(--bg-card); border: 1px solid var(--border);
+        border-radius: var(--radius); font-size: 12.5px; color: var(--text-secondary);
+        font-family: 'JetBrains Mono', monospace;
+      }
       .blocks .doc-link-card-tags { margin-top: 8px; }
       .blocks .doc-link-card {
         display: block;

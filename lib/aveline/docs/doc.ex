@@ -17,6 +17,7 @@ defmodule Aveline.Docs.Doc do
   @max_title 200
   @max_summary 255
   @actor_types ~w(human agent)
+  @kinds ~w(doc notebook)
 
   @derive {Jason.Encoder,
            only: [
@@ -30,6 +31,7 @@ defmodule Aveline.Docs.Doc do
              :tags,
              :pin_slot,
              :orientation,
+             :kind,
              :actor_type,
              :operations,
              :intent,
@@ -50,6 +52,9 @@ defmodule Aveline.Docs.Doc do
     field :pin_slot, :integer
     # Exactly one per workspace; undeletable by CHECK. See Docs moduledoc.
     field :orientation, :boolean, default: false
+    # "doc" | "notebook" — set once at create, carried across versions,
+    # never editable through apply_ops.
+    field :kind, :string, default: "doc"
     field :actor_type, :string
     field :operations, {:array, :map}, default: []
     field :intent, :string
@@ -76,6 +81,7 @@ defmodule Aveline.Docs.Doc do
 
   def max_tags, do: @max_tags
   def actor_types, do: @actor_types
+  def kinds, do: @kinds
 
   def changeset(doc, attrs) do
     doc
@@ -90,6 +96,7 @@ defmodule Aveline.Docs.Doc do
       :tags,
       :pin_slot,
       :orientation,
+      :kind,
       :owner_id,
       :actor_user_id,
       :actor_type,
@@ -110,6 +117,7 @@ defmodule Aveline.Docs.Doc do
       :actor_type
     ])
     |> validate_inclusion(:actor_type, @actor_types)
+    |> validate_inclusion(:kind, @kinds)
     |> validate_length(:title, min: 1, max: @max_title)
     |> validate_length(:summary, max: @max_summary)
     |> validate_slug()

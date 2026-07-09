@@ -2,6 +2,7 @@ defmodule AvelineWeb.WorkspaceShowLive do
   @moduledoc false
   use AvelineWeb, :live_view
 
+  alias Aveline.Broadcasts
   alias Aveline.Docs
   alias Aveline.DocViews
   alias Aveline.Tags
@@ -10,12 +11,21 @@ defmodule AvelineWeb.WorkspaceShowLive do
   alias Aveline.Workspaces
   alias AvelineWeb.LiveSession
 
+  # Broadcast-triggered refetches are coalesced: the first event arms a
+  # timer, later events within the window ride along. A burst of agent
+  # writes then costs one refetch per window instead of one per doc.
+  @refetch_debounce_ms 150
+
   @impl true
   def mount(%{"slug" => slug}, session, socket) do
     user = LiveSession.current_user(session)
 
     case LiveSession.fetch_workspace_for_user(slug, user) do
       {:ok, ws} ->
+        if connected?(socket) do
+          Broadcasts.subscribe(Broadcasts.workspace_docs_topic(ws.id))
+        end
+
         {:ok,
          assign(socket,
            page_title: "Aveline · #{ws.name}",
@@ -48,7 +58,8 @@ defmodule AvelineWeb.WorkspaceShowLive do
            kudos_counts: %{},
            total_count: 0,
            page_size: Aveline.Pagination.default_page_size(),
-           has_more?: false
+           has_more?: false,
+           refetch_queued?: false
          )}
 
       :not_found ->
@@ -93,17 +104,12 @@ defmodule AvelineWeb.WorkspaceShowLive do
       {selected_tags, group_by, sub_group_by, sort, selected_authors, search, edited_within} =
         if pristine? do
           {Map.get(config, "tags", []), Map.get(config, "group_by"),
-           parse_group(Map.get(config, "sub_group_by"), ws.id),
-           parse_sort(Map.get(config, "sort")), [], "",
+           parse_group(Map.get(config, "sub_group_by"), ws.id), parse_sort(Map.get(config, "sort")), [], "",
            Aveline.Docs.normalize_within(Map.get(config, "edited"))}
         else
-          {parse_tags(params["tag"]),
-           parse_group(params["group"], ws.id),
-           parse_group(params["subgroup"], ws.id),
-           parse_sort(params["sort"]),
-           parse_authors(params["author"], socket.assigns.workspace_authors),
-           params["q"] || "",
-           Aveline.Docs.normalize_within(params["edited"])}
+          {parse_tags(params["tag"]), parse_group(params["group"], ws.id), parse_group(params["subgroup"], ws.id),
+           parse_sort(params["sort"]), parse_authors(params["author"], socket.assigns.workspace_authors),
+           params["q"] || "", Aveline.Docs.normalize_within(params["edited"])}
         end
 
       # A sub-group only makes sense once a group is chosen, and it must
@@ -119,30 +125,82 @@ defmodule AvelineWeb.WorkspaceShowLive do
              edited_within != Aveline.Docs.normalize_within(Map.get(config, "edited")) or
              selected_authors != [] or search != "")
 
-      handle_docs_params(socket, current_view, selected_tags, group_by, sub_group_by, sort, selected_authors, search, edited_within, modified?)
+      handle_docs_params(
+        socket,
+        current_view,
+        selected_tags,
+        group_by,
+        sub_group_by,
+        sort,
+        selected_authors,
+        search,
+        edited_within,
+        modified?
+      )
     end
   end
 
-  defp handle_docs_params(socket, current_view, selected_tags, group_by, sub_group_by, sort, selected_authors, search, edited_within, modified?) do
+  defp handle_docs_params(
+         socket,
+         current_view,
+         selected_tags,
+         group_by,
+         sub_group_by,
+         sort,
+         selected_authors,
+         search,
+         edited_within,
+         modified?
+       ) do
+    socket =
+      socket
+      |> assign(
+        selected_tags: selected_tags,
+        selected_authors: selected_authors,
+        group_by: group_by,
+        sub_group_by: sub_group_by,
+        edited_within: edited_within,
+        current_view: current_view,
+        modified?: modified?,
+        sort: sort,
+        search: search,
+        # On a view, the sidebar highlights that view's item; otherwise
+        # Docs stays highlighted regardless of filter state.
+        nav_active: if(current_view, do: {:view, current_view.name}, else: :all),
+        topbar_title:
+          cond do
+            current_view -> current_view.name
+            selected_tags == [] -> "Docs"
+            true -> Enum.map_join(selected_tags, " · ", &"##{&1}")
+          end
+      )
+      |> refetch_docs(socket.assigns.page_size)
+
+    {:noreply, socket}
+  end
+
+  # Re-runs the current query — filters, sort, search, grouping all live
+  # in assigns — and rebuilds every list-derived assign. `keep` is how
+  # many rows to fetch: the page size on navigation, the loaded window
+  # on a broadcast refresh so pages pulled in via load_more survive.
+  defp refetch_docs(socket, keep) do
     ws = socket.assigns.workspace
-    page_size = socket.assigns.page_size
-    owner_ids = author_ids(selected_authors, socket.assigns.workspace_authors)
 
     # Fetch one extra row so we can tell whether more pages exist without
     # a separate COUNT(*).
     raw =
       Docs.list_current(ws.id,
-        sort: sort,
-        tags: selected_tags,
-        owner_ids: owner_ids,
-        search: search,
-        updated: edited_within,
-        limit: page_size + 1
+        sort: socket.assigns.sort,
+        tags: socket.assigns.selected_tags,
+        owner_ids: author_ids(socket.assigns.selected_authors, socket.assigns.workspace_authors),
+        search: socket.assigns.search,
+        updated: socket.assigns.edited_within,
+        limit: keep + 1
       )
 
     {items, has_more?} =
       case raw do
-        list when length(list) > page_size -> {Enum.take(list, page_size), true}
+        list when length(list) > keep -> {Enum.take(list, keep), true}
         list -> {list, false}
       end
 
@@ -158,35 +216,21 @@ defmodule AvelineWeb.WorkspaceShowLive do
       |> Enum.flat_map(fn i -> if i.owner, do: [i.owner.username], else: [] end)
       |> Enum.frequencies()
 
-    {:noreply,
-     assign(socket,
-       selected_tags: selected_tags,
-       selected_authors: selected_authors,
-       group_by: group_by,
-       sub_group_by: sub_group_by,
-       edited_within: edited_within,
-       current_view: current_view,
-       modified?: modified?,
-       sections: group_by && grouped_sections(ws.id, group_by, sub_group_by, items),
-       sort: sort,
-       search: search,
-       items: items,
-       chip_counts: chip_counts,
-       author_counts: author_counts,
-       view_counts: DocViews.counts_by_base(base_ids),
-       kudos_counts: Kudos.counts_by_base(base_ids),
-       total_count: length(items),
-       has_more?: has_more?,
-       # On a view, the sidebar highlights that view's item; otherwise
-       # Docs stays highlighted regardless of filter state.
-       nav_active: if(current_view, do: {:view, current_view.name}, else: :all),
-       topbar_title:
-         cond do
-           current_view -> current_view.name
-           selected_tags == [] -> "Docs"
-           true -> Enum.map_join(selected_tags, " · ", &"##{&1}")
-         end
-     )}
+    assign(socket,
+      items: items,
+      sections:
+        socket.assigns.group_by &&
+          grouped_sections(ws.id, socket.assigns.group_by, socket.assigns.sub_group_by, items),
+      chip_counts: chip_counts,
+      author_counts: author_counts,
+      view_counts: DocViews.counts_by_base(base_ids),
+      kudos_counts: Kudos.counts_by_base(base_ids),
+      total_count: length(items),
+      has_more?: has_more?,
+      # A broadcast can bring in a doc carrying a tag that didn't exist
+      # at mount — refresh the filter vocabulary alongside the list.
+      workspace_tags: Docs.list_workspace_tags(ws.id)
+    )
   end
 
   # Columns for the grouped (kanban) rendering: the scope's members in
@@ -373,7 +417,8 @@ defmodule AvelineWeb.WorkspaceShowLive do
     {:noreply,
      assign(socket,
        items: items,
-       sections: socket.assigns.group_by && grouped_sections(ws.id, socket.assigns.group_by, socket.assigns.sub_group_by, items),
+       sections:
+         socket.assigns.group_by && grouped_sections(ws.id, socket.assigns.group_by, socket.assigns.sub_group_by, items),
        view_counts: DocViews.counts_by_base(base_ids),
        kudos_counts: Kudos.counts_by_base(base_ids),
        chip_counts: items |> Enum.flat_map(& &1.tags) |> Enum.frequencies(),
@@ -384,6 +429,29 @@ defmodule AvelineWeb.WorkspaceShowLive do
        has_more?: has_more?
      )}
   end
+
+  # Any doc event in the workspace re-runs the current query so the list
+  # stays live. User-chosen view/filter/group state lives in assigns and
+  # is untouched. The workspace check matters: live navigation reuses
+  # the process, so a subscription from a previously viewed workspace
+  # can still deliver here.
+  @impl true
+  def handle_info({event, %{workspace_id: ws_id}}, socket)
+      when event in [:doc_created, :doc_updated, :doc_deleted, :doc_restored] do
+    if ws_id == socket.assigns.workspace.id and not socket.assigns.refetch_queued? do
+      Process.send_after(self(), :refetch_docs, @refetch_debounce_ms)
+      {:noreply, assign(socket, refetch_queued?: true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(:refetch_docs, socket) do
+    keep = max(length(socket.assigns.items), socket.assigns.page_size)
+    {:noreply, socket |> assign(refetch_queued?: false) |> refetch_docs(keep)}
+  end
+
+  def handle_info(_other, socket), do: {:noreply, socket}
 
   defp sort_to_param("recent"), do: nil
   defp sort_to_param(other), do: other
@@ -801,7 +869,6 @@ defmodule AvelineWeb.WorkspaceShowLive do
     </div>
     """
   end
-
 
   attr :i, :map, required: true
   attr :ws, :map, required: true

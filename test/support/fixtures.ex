@@ -52,22 +52,22 @@ defmodule Aveline.Fixtures do
     attrs = Enum.into(attrs, %{})
 
     {:ok, item} =
-      Docs.create_doc(
-        %{
-          workspace_id: workspace.id,
-          owner_id: user.id,
-          actor_user_id: user.id,
-          actor_type: Map.get(attrs, :actor_type, "agent"),
-          title: Map.get(attrs, :title, "Item #{i}"),
-          slug: Map.get(attrs, :slug),
-          summary: Map.get(attrs, :summary),
-          tags: Map.get(attrs, :tags, []),
-          blocks: Map.get(attrs, :blocks, [
+      Docs.create_doc(%{
+        workspace_id: workspace.id,
+        owner_id: user.id,
+        actor_user_id: user.id,
+        actor_type: Map.get(attrs, :actor_type, "agent"),
+        title: Map.get(attrs, :title, "Item #{i}"),
+        slug: Map.get(attrs, :slug),
+        kind: Map.get(attrs, :kind, "doc"),
+        summary: Map.get(attrs, :summary),
+        tags: Map.get(attrs, :tags, []),
+        blocks:
+          Map.get(attrs, :blocks, [
             %{"type" => "paragraph", "content" => [%{"text" => "Body #{i}"}]}
           ]),
-          intent: Map.get(attrs, :intent, "seed item-fixture")
-        }
-      )
+        intent: Map.get(attrs, :intent, "seed item-fixture")
+      })
 
     item
   end

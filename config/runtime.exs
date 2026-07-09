@@ -7,6 +7,12 @@ if System.get_env("PHX_SERVER") do
   config :aveline, AvelineWeb.Endpoint, server: true
 end
 
+# Deploy mode. DEPLOY_MODE=local marks a single-user self-hosted deploy
+# (compose.yaml): first boot seeds a user + API token, and local-only
+# capabilities key off Aveline.Config.local_mode?/0. Anything else — including
+# unset — is cloud, so existing deploys are unaffected.
+config :aveline, :deploy_mode, System.get_env("DEPLOY_MODE", "cloud")
+
 # Logging — stdout, captured by Fly. Sentry handles errors + Logs.
 if config_env() == :prod do
   config :logger, level: :info

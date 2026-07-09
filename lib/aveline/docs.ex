@@ -119,7 +119,6 @@ defmodule Aveline.Docs do
     scrubbed
   end
 
-
   # Postgres full-text: websearch_to_tsquery handles the user-facing syntax
   # (phrase in quotes, -word to exclude, OR for either). Matches against
   # the `search_text` column via the GIN index.
@@ -414,8 +413,9 @@ defmodule Aveline.Docs do
       %{workspace_id: ^workspace_id} = ds ->
         %{
           "source" => Aveline.DataSources.safe_map(ds),
-          "result" =>
-            %{"error" => "data source was deleted (credential destroyed); connect a new one and update this block"}
+          "result" => %{
+            "error" => "data source was deleted (credential destroyed); connect a new one and update this block"
+          }
         }
 
       _ ->
@@ -542,6 +542,7 @@ defmodule Aveline.Docs do
         tags: Map.get(attrs, :tags, []),
         # Internal-only (workspace seeding) — not exposed through the API.
         orientation: Map.get(attrs, :orientation, false),
+        kind: Map.get(attrs, :kind) || "doc",
         owner_id: Map.fetch!(attrs, :owner_id),
         actor_user_id: Map.fetch!(attrs, :actor_user_id),
         actor_type: Map.fetch!(attrs, :actor_type)
@@ -562,7 +563,8 @@ defmodule Aveline.Docs do
     with :ok <- Tags.ensure_all_exist(ws_id, tags),
          :ok <- Tags.ensure_no_scope_conflict(tags),
          {:ok, ops} <- resolve_doc_links(ops, ws_id),
-         {:ok, new_blocks} <- run_document_apply([], ops) do
+         {:ok, new_blocks} <- run_document_apply([], ops),
+         :ok <- validate_frames(new_blocks, Map.get(base_attrs, :kind) || "doc") do
       insert_version(:new, new_blocks, ops, base_attrs, opts)
     end
   end
@@ -571,11 +573,42 @@ defmodule Aveline.Docs do
       when is_list(ops) and is_map(update_attrs) do
     tags = Map.get(update_attrs, :tags, current.tags) || []
 
-    with :ok <- Tags.ensure_all_exist(current.workspace_id, tags),
+    with :ok <- ensure_kind_not_updated(update_attrs),
+         :ok <- Tags.ensure_all_exist(current.workspace_id, tags),
          :ok <- Tags.ensure_no_scope_conflict(tags),
          {:ok, ops} <- resolve_doc_links(ops, current.workspace_id),
-         {:ok, new_blocks} <- run_document_apply(current.blocks || [], ops) do
+         {:ok, new_blocks} <- run_document_apply(current.blocks || [], ops),
+         :ok <- validate_frames(new_blocks, current.kind) do
       insert_version(current, new_blocks, ops, update_attrs, opts)
+    end
+  end
+
+  # Frame cells are notebook-only, and their name graph (unique names,
+  # refs pointing to earlier frames) must hold for the WHOLE post-apply
+  # block list — a move_block can invalidate a previously fine ref — so
+  # the check runs after ops apply and fails the version all-or-nothing.
+  defp validate_frames(new_blocks, kind) do
+    cond do
+      not Enum.any?(new_blocks, &(&1["type"] == "frame")) ->
+        :ok
+
+      kind != "notebook" ->
+        {:error, "frame blocks are only allowed in notebooks (create the doc with kind: \"notebook\")"}
+
+      true ->
+        Aveline.Frames.Graph.validate(new_blocks)
+    end
+  end
+
+  # kind is set once at create and carried across versions verbatim.
+  # An update that tries to flip it fails as a value — silently keeping
+  # the old kind would tell the caller their change shipped when it
+  # didn't.
+  defp ensure_kind_not_updated(update_attrs) do
+    if Map.has_key?(update_attrs, :kind) do
+      {:error, "kind is immutable; it is set at create"}
+    else
+      :ok
     end
   end
 
@@ -629,6 +662,12 @@ defmodule Aveline.Docs do
   defp resolve_block_target(%{"type" => "chart"} = block, ws_id),
     do: resolve_chart_source(block, ws_id)
 
+  # Frame blocks carry the same source/data_source_id pair one level
+  # down, in `input` (frame-ref inputs pass through — names resolve at
+  # run time against the doc itself).
+  defp resolve_block_target(%{"type" => "frame"} = block, ws_id),
+    do: resolve_frame_input(block, ws_id)
+
   defp resolve_block_target(%{"type" => t} = block, _ws_id)
        when is_binary(t) and t != "doc_link",
        do: {:ok, block}
@@ -658,26 +697,39 @@ defmodule Aveline.Docs do
   end
 
   # Typeless modify_block patches: `source`/`data_source_id` are chart
-  # keys (doc_link patches use `doc`/`doc_id` and match above).
+  # keys, `input` is a frame key (doc_link patches use `doc`/`doc_id`
+  # and match above).
   defp resolve_block_target(%{"source" => name} = patch, ws_id) when is_binary(name),
     do: resolve_chart_source(patch, ws_id)
 
   defp resolve_block_target(%{"data_source_id" => id} = patch, ws_id) when is_binary(id),
     do: resolve_chart_source(patch, ws_id)
 
+  defp resolve_block_target(%{"input" => %{}} = patch, ws_id),
+    do: resolve_frame_input(patch, ws_id)
+
   defp resolve_block_target(block, _ws_id), do: {:ok, block}
+
+  # A frame's input map speaks the chart resolution grammar (`source`
+  # name → `data_source_id`, id verified in-workspace); frame refs and
+  # malformed inputs pass through for Block.validate's schema error.
+  defp resolve_frame_input(%{"input" => %{} = input} = block, ws_id) do
+    with {:ok, input} <- resolve_chart_source(input, ws_id) do
+      {:ok, Map.put(block, "input", input)}
+    end
+  end
+
+  defp resolve_frame_input(block, _ws_id), do: {:ok, block}
 
   defp resolve_chart_source(block, ws_id) do
     cond do
       is_binary(block["source"]) ->
         case Aveline.DataSources.get_current_by_name(ws_id, block["source"]) do
           nil ->
-            {:error, :data_source_not_found,
-             "data source not found in this workspace: #{block["source"]}"}
+            {:error, :data_source_not_found, "data source not found in this workspace: #{block["source"]}"}
 
           ds ->
-            {:ok,
-             block |> Map.delete("source") |> Map.put("data_source_id", ds.base_data_source_id)}
+            {:ok, block |> Map.delete("source") |> Map.put("data_source_id", ds.base_data_source_id)}
         end
 
       is_binary(block["data_source_id"]) ->
@@ -692,8 +744,7 @@ defmodule Aveline.Docs do
                 {:ok, block}
 
               _ ->
-                {:error, :data_source_not_found,
-                 "data source not found in this workspace: #{block["data_source_id"]}"}
+                {:error, :data_source_not_found, "data source not found in this workspace: #{block["data_source_id"]}"}
             end
         end
 
@@ -874,10 +925,11 @@ defmodule Aveline.Docs do
         title: Map.get(update_attrs, :title, current.title),
         summary: Map.get(update_attrs, :summary, current.summary),
         tags: Map.get(update_attrs, :tags, current.tags),
-        # Slot + orientation carry across edits; neither is editable
+        # Slot + orientation + kind carry across edits; none is editable
         # through apply_ops.
         pin_slot: current.pin_slot,
         orientation: current.orientation,
+        kind: current.kind,
         owner_id: current.owner_id,
         actor_user_id: Map.fetch!(update_attrs, :actor_user_id),
         actor_type: actor_type,
@@ -1088,7 +1140,11 @@ defmodule Aveline.Docs do
 
   defp finish_apply({:ok, %{doc: %Doc{} = doc}}) do
     doc = Repo.preload(doc, [:owner, :actor_user])
-    Broadcasts.publish_doc_event(:doc_updated, doc)
+
+    Broadcasts.publish_doc_event(
+      if(doc.version_number == 1, do: :doc_created, else: :doc_updated),
+      doc
+    )
 
     Events.record(%{
       workspace_id: doc.workspace_id,

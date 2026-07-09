@@ -5,7 +5,10 @@ defmodule Aveline.Repo.Migrations.CreateSidebarFavorites do
     create table(:sidebar_favorites, primary_key: false) do
       add :id, :binary_id, primary_key: true
       add :user_id, references(:users, type: :binary_id, on_delete: :delete_all), null: false
-      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all), null: false
+
+      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all),
+        null: false
+
       # "tag" or "view". `key` is the tag string for tag favorites or the
       # view slug for view favorites.
       add :kind, :string, null: false

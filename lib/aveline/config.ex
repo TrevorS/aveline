@@ -22,4 +22,11 @@ defmodule Aveline.Config do
   Returns the session options for the application.
   """
   def session_options!, do: @session_options
+
+  @doc """
+  True when this deploy runs in single-user local mode (DEPLOY_MODE=local).
+  Read at runtime — unlike the compile-time values above — so the same
+  image serves both modes.
+  """
+  def local_mode?, do: Application.get_env(:aveline, :deploy_mode, "cloud") == "local"
 end

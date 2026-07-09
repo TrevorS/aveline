@@ -7,6 +7,7 @@ defmodule AvelineWeb.Api.DocController do
   use AvelineWeb, :controller
 
   alias Aveline.Docs
+  alias Aveline.Docs.Doc
   alias Aveline.DocViews
   alias Aveline.Kudos
   alias AvelineWeb.Api.Envelope
@@ -74,6 +75,7 @@ defmodule AvelineWeb.Api.DocController do
         "summary": "...",              // optional
         "tags": ["..."],               // must exist in workspace
         "blocks": [...],               // block array, see Aveline.Blocks
+        "kind": "doc" | "notebook",    // optional; defaults to "doc"
         "intent": "...",               // why
         "actor": "human" | "agent"     // defaults to "agent" for API
       }
@@ -86,20 +88,21 @@ defmodule AvelineWeb.Api.DocController do
     ws = conn.assigns.current_workspace
     user = conn.assigns.current_user
 
-    attrs = %{
-      title: params["title"],
-      slug: params["slug"],
-      summary: params["summary"],
-      tags: params["tags"] || [],
-      blocks: params["blocks"] || [],
-      workspace_id: ws.id,
-      owner_id: user.id,
-      actor_user_id: user.id,
-      actor_type: params["actor"] || "agent",
-      intent: params["intent"]
-    }
-
-    with {:ok, item} <- Docs.create_doc(attrs) do
+    with {:ok, kind} <- parse_kind(params["kind"]),
+         attrs = %{
+           title: params["title"],
+           slug: params["slug"],
+           summary: params["summary"],
+           tags: params["tags"] || [],
+           blocks: params["blocks"] || [],
+           kind: kind,
+           workspace_id: ws.id,
+           owner_id: user.id,
+           actor_user_id: user.id,
+           actor_type: params["actor"] || "agent",
+           intent: params["intent"]
+         },
+         {:ok, item} <- Docs.create_doc(attrs) do
       Envelope.ok(conn, %{
         slug: item.slug,
         doc_id: item.base_doc_id,
@@ -126,6 +129,9 @@ defmodule AvelineWeb.Api.DocController do
         "tags": [...]
       }
 
+  `kind` is immutable after create — a body carrying one is rejected
+  with 422 rather than silently ignored.
+
   Returns the new version's id + number so the agent can verify it
   shipped.
   """
@@ -133,7 +139,8 @@ defmodule AvelineWeb.Api.DocController do
     ws = conn.assigns.current_workspace
     user = conn.assigns.current_user
 
-    with %_{} = current <- Docs.get_current_by_slug(ws.id, slug) || {:error, :not_found} do
+    with %_{} = current <- Docs.get_current_by_slug(ws.id, slug) || {:error, :not_found},
+         :ok <- reject_kind_update(params) do
       ops = params["operations"] || []
       intent = params["intent"]
       resolves = params["resolves_comment_ids"] || []
@@ -262,6 +269,23 @@ defmodule AvelineWeb.Api.DocController do
   end
 
   defp parse_slot(_), do: {:error, "pin slot must be an integer between 1 and 6"}
+
+  defp parse_kind(nil), do: {:ok, "doc"}
+
+  defp parse_kind(kind) do
+    if kind in Doc.kinds() do
+      {:ok, kind}
+    else
+      {:error, "kind must be one of: #{Enum.join(Doc.kinds(), ", ")}"}
+    end
+  end
+
+  # kind is set once at create; a PATCH carrying one must fail loudly
+  # rather than ship a version that silently kept the old kind.
+  defp reject_kind_update(%{"kind" => _}),
+    do: {:error, "kind is immutable; it is set at create"}
+
+  defp reject_kind_update(_params), do: :ok
 
   # ===== Helpers =====
 

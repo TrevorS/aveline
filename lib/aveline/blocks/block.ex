@@ -10,7 +10,12 @@ defmodule Aveline.Blocks.Block do
   v0 block types:
     * `heading`   — `%{type, level (1-3), text}` (plain text, no inline)
     * `paragraph` — `%{type, content: [<inline span>]}`
-    * `code`      — `%{type, language: string|null, content: string}`
+    * `code`      — `%{type, language: string|null, content: string,
+      name?}` — a fenced snippet anywhere; in a notebook, an elixir
+      code block is also an executable cell (Runs evaluates `content`
+      in the notebook's runtime session, local deployments only) and
+      `name` is an optional snake_case label. Outputs live in
+      cell_runs — never on the block.
     * `list`      — `%{type, ordered: bool, items: [%{id, content: [<inline>]}]}`
     * `table`     — `%{type, headers: [string], rows: [[ [<inline>] ]]}`
     * `doc_link`  — `%{type, doc_id: uuid, note?: [<inline>]}` — an ordered
@@ -25,6 +30,16 @@ defmodule Aveline.Blocks.Block do
       data source name); the Docs context resolves it to the source's
       base id and verifies it exists in the workspace. Reads gain a
       computed `result` (columns/rows or error) — never persisted.
+    * `frame`     — `%{type, name, input, ops, viz?}` — a notebook cell:
+      a named dataframe whose `input` is a data-source query
+      (`%{"data_source_id", "query"}`, with `input.source` name
+      resolution mirroring chart) XOR an earlier frame in the same doc
+      (`%{"frame" => name}`), transformed by a declarative op pipeline
+      (see `Aveline.Frames`). `viz` reuses the chart grammar. Frame
+      blocks are notebook-only and their name graph is checked by the
+      Docs context. Outputs live in cell_runs — never on the block; the
+      `result` / `schema` / `source` echoes are not fields here, so
+      pasted echoes strip on rewrite.
 
   Docs can also be linked inline: any span (paragraph, list item, table
   cell, doc_link note) may carry `link: %{doc_id}` — same write-time
@@ -38,9 +53,12 @@ defmodule Aveline.Blocks.Block do
   alias Aveline.Blocks.Id
   alias Aveline.Blocks.Inline
 
-  @types ~w(heading paragraph code list table doc_link chart)
+  @types ~w(heading paragraph code list table doc_link chart frame)
 
   @uuid_re ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+  @max_frame_name 64
+  @frame_name_re ~r/^[a-z][a-z0-9_]*$/
 
   @doc "Returns the list of supported block types."
   def types, do: @types
@@ -146,7 +164,8 @@ defmodule Aveline.Blocks.Block do
     {:error, "paragraph requires content (list of inline spans)"}
   end
 
-  # code
+  # code — also a notebook cell when the language is elixir; `name` is
+  # an optional label there and harmless anywhere else.
   defp validate_type_fields("code", %{"content" => content} = block) when is_binary(content) do
     lang =
       case Map.get(block, "language") do
@@ -156,14 +175,18 @@ defmodule Aveline.Blocks.Block do
         _ -> :error
       end
 
-    if lang == :error do
-      {:error, "code.language must be a string or null"}
-    else
-      out =
-        %{"content" => content}
-        |> then(fn m -> if lang, do: Map.put(m, "language", lang), else: Map.put(m, "language", nil) end)
+    name = Map.get(block, "name")
 
-      {:ok, out}
+    cond do
+      lang == :error ->
+        {:error, "code.language must be a string or null"}
+
+      name != nil and not valid_frame_name?(name) ->
+        {:error, "code.name must be a snake_case identifier (max #{@max_frame_name} chars)"}
+
+      true ->
+        out = %{"content" => content, "language" => lang}
+        {:ok, if(name, do: Map.put(out, "name", name), else: out)}
     end
   end
 
@@ -245,8 +268,6 @@ defmodule Aveline.Blocks.Block do
   # echoes are stripped on rewrite.
   defp validate_type_fields("chart", %{"data_source_id" => ds_id, "query" => query} = block)
        when is_binary(ds_id) and is_binary(query) do
-    viz = Map.get(block, "viz", %{"type" => "table"})
-
     cond do
       not Regex.match?(@uuid_re, ds_id) ->
         {:error,
@@ -258,44 +279,15 @@ defmodule Aveline.Blocks.Block do
       String.length(query) > 10_000 ->
         {:error, "chart.query too long (10k max)"}
 
-      not is_map(viz) or viz["type"] not in ["table", "line", "bar", "combo"] ->
-        {:error, "chart.viz.type must be \"table\", \"line\", \"bar\", or \"combo\""}
-
-      viz["type"] in ["line", "bar"] and
-          not (is_binary(viz["x"]) and viz["x"] != "" and is_binary(viz["y"]) and viz["y"] != "") ->
-        {:error, "chart.viz needs x and y (column names) for line/bar"}
-
-      viz["type"] == "combo" and not valid_combo_series?(viz) ->
-        {:error,
-         "chart.viz combo needs x and series: 1-4 of {y: column, type: line | bar, axis?: left | right}"}
-
       true ->
-        clean_viz =
-          case viz["type"] do
-            "table" ->
-              %{"type" => "table"}
-
-            "combo" ->
-              %{
-                "type" => "combo",
-                "x" => viz["x"],
-                "series" =>
-                  Enum.map(viz["series"], fn s ->
-                    base = %{"y" => s["y"], "type" => s["type"]}
-                    if s["axis"] == "right", do: Map.put(base, "axis", "right"), else: base
-                  end)
-              }
-
-            t ->
-              %{"type" => t, "x" => viz["x"], "y" => viz["y"]}
-          end
-
-        {:ok,
-         %{
-           "data_source_id" => String.downcase(ds_id),
-           "query" => query,
-           "viz" => clean_viz
-         }}
+        with {:ok, clean_viz} <- validate_viz(Map.get(block, "viz", %{"type" => "table"})) do
+          {:ok,
+           %{
+             "data_source_id" => String.downcase(ds_id),
+             "query" => query,
+             "viz" => clean_viz
+           }}
+        end
     end
   end
 
@@ -304,8 +296,111 @@ defmodule Aveline.Blocks.Block do
      "chart requires data_source_id (source base id, or source: <name> resolved server-side), query (SQL), and optional viz"}
   end
 
+  # frame — a notebook cell. Shape only: the name graph (unique names,
+  # refs pointing upward) needs the whole doc and the doc's kind, so it
+  # lives in the Docs context; execution lives in cell runs. The
+  # captured `result` / `schema` / `source` echoes are not fields here,
+  # so pasted echoes strip on rewrite.
+  defp validate_type_fields("frame", %{"name" => name, "input" => input} = block) do
+    cond do
+      not valid_frame_name?(name) ->
+        {:error, "frame.name must be a snake_case identifier (max #{@max_frame_name} chars)"}
+
+      true ->
+        with {:ok, input} <- validate_frame_input(input),
+             {:ok, ops} <- Aveline.Frames.Pipeline.validate(Map.get(block, "ops", [])),
+             {:ok, viz} <- validate_viz(Map.get(block, "viz", %{"type" => "table"})) do
+          {:ok, %{"name" => name, "input" => input, "ops" => ops, "viz" => viz}}
+        end
+    end
+  end
+
+  defp validate_type_fields("frame", _) do
+    {:error,
+     "frame requires name (snake_case), input ({source|data_source_id, query} or {frame: <earlier frame name>}), and optional ops + viz"}
+  end
+
   # ===== Helpers (placed after all validate_type_fields clauses so the
   # compiler doesn't complain about non-contiguous clause grouping) =====
+
+  # Shared by chart and frame: the viz grammar is one language.
+  defp validate_viz(viz) do
+    cond do
+      not is_map(viz) or viz["type"] not in ["table", "line", "bar", "combo"] ->
+        {:error, "viz.type must be \"table\", \"line\", \"bar\", or \"combo\""}
+
+      viz["type"] in ["line", "bar"] and
+          not (is_binary(viz["x"]) and viz["x"] != "" and is_binary(viz["y"]) and viz["y"] != "") ->
+        {:error, "viz needs x and y (column names) for line/bar"}
+
+      viz["type"] == "combo" and not valid_combo_series?(viz) ->
+        {:error, "viz combo needs x and series: 1-4 of {y: column, type: line | bar, axis?: left | right}"}
+
+      true ->
+        {:ok, clean_viz(viz)}
+    end
+  end
+
+  defp clean_viz(%{"type" => "table"}), do: %{"type" => "table"}
+
+  defp clean_viz(%{"type" => "combo"} = viz) do
+    %{
+      "type" => "combo",
+      "x" => viz["x"],
+      "series" =>
+        Enum.map(viz["series"], fn s ->
+          base = %{"y" => s["y"], "type" => s["type"]}
+          if s["axis"] == "right", do: Map.put(base, "axis", "right"), else: base
+        end)
+    }
+  end
+
+  defp clean_viz(%{"type" => t} = viz), do: %{"type" => t, "x" => viz["x"], "y" => viz["y"]}
+
+  defp valid_frame_name?(name),
+    do:
+      is_binary(name) and byte_size(name) <= @max_frame_name and
+        Regex.match?(@frame_name_re, name)
+
+  # input is a data-source query XOR an upstream frame reference.
+  defp validate_frame_input(%{"data_source_id" => ds_id, "query" => query} = input)
+       when is_binary(ds_id) and is_binary(query) do
+    cond do
+      Map.has_key?(input, "frame") ->
+        {:error, "frame.input takes a source query or an upstream frame, not both"}
+
+      not Regex.match?(@uuid_re, ds_id) ->
+        {:error,
+         "frame.input.data_source_id must be a UUID (the source's base id); or pass input.source: <name> and the server resolves it"}
+
+      String.trim(query) == "" ->
+        {:error, "frame.input.query cannot be blank"}
+
+      String.length(query) > 10_000 ->
+        {:error, "frame.input.query too long (10k max)"}
+
+      true ->
+        {:ok, %{"data_source_id" => String.downcase(ds_id), "query" => query}}
+    end
+  end
+
+  defp validate_frame_input(%{"frame" => name} = input) do
+    cond do
+      Map.has_key?(input, "query") or Map.has_key?(input, "data_source_id") or
+          Map.has_key?(input, "source") ->
+        {:error, "frame.input takes a source query or an upstream frame, not both"}
+
+      not valid_frame_name?(name) ->
+        {:error, "frame.input.frame must be an upstream frame's snake_case name"}
+
+      true ->
+        {:ok, %{"frame" => name}}
+    end
+  end
+
+  defp validate_frame_input(_input) do
+    {:error, "frame.input must be {source|data_source_id, query} or {frame: <earlier frame name>}"}
+  end
 
   defp valid_combo_series?(%{"x" => x, "series" => series}) when is_binary(x) and x != "" do
     is_list(series) and length(series) in 1..4 and

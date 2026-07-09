@@ -4,7 +4,10 @@ defmodule Aveline.Repo.Migrations.CreateEvents do
   def change do
     create table(:events, primary_key: false) do
       add :id, :binary_id, primary_key: true
-      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all), null: false
+
+      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all),
+        null: false
+
       # Who did it. Nullable for system-originated events.
       add :actor_user_id, references(:users, type: :binary_id, on_delete: :nilify_all)
       # "human" | "agent" — mirrors actor_type on docs/comments. Stored

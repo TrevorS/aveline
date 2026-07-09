@@ -4,7 +4,10 @@ defmodule Aveline.Repo.Migrations.CreateTags do
   def change do
     create table(:tags, primary_key: false) do
       add :id, :binary_id, primary_key: true
-      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all), null: false
+
+      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all),
+        null: false
+
       # The tag string as it appears on docs (e.g. "oncall"). Slug format.
       add :slug, :string, null: false
       # Required. Capped via changeset to keep the index/cards readable.

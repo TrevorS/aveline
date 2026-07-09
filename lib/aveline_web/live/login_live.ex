@@ -14,8 +14,7 @@ defmodule AvelineWeb.LoginLive do
       nil ->
         # Carried into the form so SessionController can land the user
         # back where they were headed (it sanitizes to relative paths).
-        {:ok, assign(socket, page_title: "Aveline · Log in", next: params["next"]),
-         layout: false}
+        {:ok, assign(socket, page_title: "Aveline · Log in", next: params["next"]), layout: false}
 
       _user ->
         {:ok, push_navigate(socket, to: ~p"/")}

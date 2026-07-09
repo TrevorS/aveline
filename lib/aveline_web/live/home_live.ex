@@ -7,6 +7,7 @@ defmodule AvelineWeb.HomeLive do
   """
   use AvelineWeb, :live_view
 
+  alias Aveline.Broadcasts
   alias Aveline.Comments
   alias Aveline.Docs
   alias Aveline.DocViews
@@ -14,12 +15,21 @@ defmodule AvelineWeb.HomeLive do
   alias Aveline.Workspaces
   alias AvelineWeb.LiveSession
 
+  # Broadcast-triggered refetches are coalesced: the first event arms a
+  # timer, later events within the window ride along. A burst of agent
+  # writes then costs one refetch per window instead of one per doc.
+  @refetch_debounce_ms 150
+
   @impl true
   def mount(%{"slug" => slug}, session, socket) do
     user = LiveSession.current_user(session)
 
     case LiveSession.fetch_workspace_for_user(slug, user) do
       {:ok, ws} ->
+        if connected?(socket) do
+          Broadcasts.subscribe(Broadcasts.workspace_docs_topic(ws.id))
+        end
+
         {:ok,
          assign(socket,
            page_title: "Aveline · #{ws.name}",
@@ -40,7 +50,8 @@ defmodule AvelineWeb.HomeLive do
            # hint line below for its description. Explains tags — does
            # not navigate.
            tag_stats: Tags.list_with_stats(ws.id),
-           glossary_open: nil
+           glossary_open: nil,
+           refetch_queued?: false
          )}
 
       :not_found ->
@@ -62,6 +73,36 @@ defmodule AvelineWeb.HomeLive do
     open = if socket.assigns.glossary_open == slug, do: nil, else: slug
     {:noreply, assign(socket, glossary_open: open)}
   end
+
+  # Any doc event in the workspace refreshes the doc-backed shelves —
+  # pinned (pin/unpin arrives as :doc_updated), recent changes, and the
+  # orientation card. The workspace check matters: live navigation
+  # reuses the process, so a subscription from a previously viewed
+  # workspace can still deliver here.
+  @impl true
+  def handle_info({event, %{workspace_id: ws_id}}, socket)
+      when event in [:doc_created, :doc_updated, :doc_deleted, :doc_restored] do
+    if ws_id == socket.assigns.workspace.id and not socket.assigns.refetch_queued? do
+      Process.send_after(self(), :refetch_shelves, @refetch_debounce_ms)
+      {:noreply, assign(socket, refetch_queued?: true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(:refetch_shelves, socket) do
+    ws_id = socket.assigns.workspace.id
+
+    {:noreply,
+     assign(socket,
+       refetch_queued?: false,
+       orientation: Docs.get_orientation(ws_id),
+       pinned_docs: Docs.list_pinned(ws_id),
+       recent_changes: Docs.list_current(ws_id, sort: :recent, limit: 5)
+     )}
+  end
+
+  def handle_info(_other, socket), do: {:noreply, socket}
 
   defp open_glossary_row(_rows, nil), do: nil
   defp open_glossary_row(rows, slug), do: Enum.find(rows, &(&1.tag.slug == slug))

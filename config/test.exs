@@ -45,3 +45,7 @@ config :phoenix, :plug_init_mode, :runtime
 
 # Disable Oban in test — avoids leader-election warnings during compile.
 config :aveline, Oban, testing: :inline, queues: false, plugins: false
+
+# Code cells evaluate in-process in test — booting a peer BEAM node per
+# session is the Peer backend test's own business.
+config :aveline, :runtime_backend, Aveline.Runtime.Backend.InProcess

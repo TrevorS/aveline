@@ -23,6 +23,15 @@ defmodule AvelineWeb.BlockRenderer do
   attr :block, :map, required: true
   attr :ws_slug, :string, default: nil
   attr :tag_colors, :map, default: %{}
+  # Notebook cells only: the latest captured run, derived staleness
+  # (:fresh | :stale | :never_run), and run-button state. Supplied by
+  # DocShowLive; every other block type ignores them. `exec_enabled?`
+  # gates only code cells — frames run in every deployment.
+  attr :cell_run, :any, default: nil
+  attr :cell_state, :atom, default: nil
+  attr :cell_running?, :boolean, default: false
+  attr :can_run?, :boolean, default: false
+  attr :exec_enabled?, :boolean, default: false
 
   def block(%{block: %{"type" => "heading"}} = assigns) do
     ~H"""
@@ -52,6 +61,94 @@ defmodule AvelineWeb.BlockRenderer do
       <.block_anchor id={@block["id"]} />
       <.spans content={@block["content"] || []} ws_slug={@ws_slug} />
     </p>
+    """
+  end
+
+  # code cell — an elixir code block inside a notebook. `cell_state` is
+  # non-nil exactly when DocShowLive derived run state for this block
+  # (only notebooks derive any), so plain elixir snippets in ordinary
+  # docs fall through to the static code clause below. Rendering never
+  # executes anything: source + latest captured stdout/result render
+  # everywhere, and where execution is disabled the run button gives
+  # way to a quiet note — shared notebooks stay portable.
+  def block(%{block: %{"type" => "code", "language" => "elixir"}, cell_state: state} = assigns)
+      when not is_nil(state) do
+    assigns = assign(assigns, run: assigns.cell_run)
+
+    ~H"""
+    <div id={@block["id"]} class="blk-code-cell blk-anchored">
+      <.block_anchor id={@block["id"]} />
+      <div class="frame-header">
+        <span :if={@block["name"]} class="chip frame-name" title="Code cell name">
+          {@block["name"]}
+        </span>
+        <span class="chip">elixir</span>
+        <span
+          :if={@cell_state == :stale}
+          class="chip frame-badge frame-badge-stale"
+          title="The cell (or an upstream cell) changed since this output was captured"
+        >
+          stale
+        </span>
+        <span :if={@cell_state == :never_run} class="chip frame-badge frame-badge-never">
+          not run yet
+        </span>
+        <span :if={@run && @run.status == "error"} class="chip frame-badge frame-badge-error">
+          error
+        </span>
+        <%= if @exec_enabled? do %>
+          <button
+            :if={@can_run?}
+            type="button"
+            class="frame-run-btn"
+            phx-click="run_cell"
+            phx-value-block-id={@block["id"]}
+            disabled={@cell_running?}
+          >
+            {if @cell_running?, do: "running…", else: "run"}
+          </button>
+        <% else %>
+          <span
+            class="cell-exec-disabled"
+            title="Code cells only execute on local-mode deployments (DEPLOY_MODE=local)"
+          >
+            execution disabled in this deployment
+          </span>
+        <% end %>
+      </div>
+      <pre
+        id={@block["id"] <> "-src"}
+        class="blk-code"
+        data-lang="elixir"
+        phx-hook="HighlightCode"
+        phx-update="ignore"
+      ><code class="language-elixir">{@block["content"]}</code></pre>
+      <div :if={@run && @run.stdout && @run.stdout != ""} class="cell-pane cell-stdout">
+        <div class="cell-pane-label">stdout</div>
+        <pre class="cell-pane-pre">{@run.stdout}</pre>
+      </div>
+      <%= case @run do %>
+        <% nil -> %>
+          <div class="frame-empty">
+            No captured output yet{if @exec_enabled?, do: " — run the cell", else: ""}.
+          </div>
+        <% %{status: "error"} -> %>
+          <div class="chart-error">{@run.outputs["error"] || "run failed"}</div>
+        <% _ -> %>
+          <div class="cell-pane cell-result">
+            <div class="cell-pane-label">result</div>
+            <pre class="cell-pane-pre">{@run.outputs["result"]}</pre>
+          </div>
+      <% end %>
+      <div :if={@run} class="frame-caption chart-caption">
+        <span class="frame-provenance">
+          run v{version_number(@run)}
+          <span :if={actor_name(@run)}>by {actor_name(@run)}</span>
+          · {Calendar.strftime(@run.inserted_at, "%Y-%m-%d %H:%M UTC")}
+          <span :if={@run.duration_ms}>· {@run.duration_ms}ms</span>
+        </span>
+      </div>
+    </div>
     """
   end
 
@@ -251,13 +348,109 @@ defmodule AvelineWeb.BlockRenderer do
     """
   end
 
+  # frame — a notebook cell. Rendering never executes anything: the
+  # latest captured run arrives via `cell_run`, staleness via
+  # `cell_state`, both derived by DocShowLive / Aveline.Runs. A frame
+  # without a run (or with an error run) is a rendered state, never a
+  # broken block.
+  def block(%{block: %{"type" => "frame"}} = assigns) do
+    run = assigns.cell_run
+    viz = assigns.block["viz"] || %{"type" => "table"}
+    outputs = (run && run.outputs) || %{}
+
+    rendered =
+      cond do
+        run == nil -> :never_run
+        run.status == "error" -> {:error, outputs["error"] || "run failed"}
+        viz["type"] == "table" -> {:table, outputs}
+        true -> AvelineWeb.ChartRenderer.spec(outputs, viz)
+      end
+
+    assigns = assign(assigns, run: run, rendered: rendered, outputs: outputs)
+
+    ~H"""
+    <div id={@block["id"]} class="blk-frame blk-anchored">
+      <.block_anchor id={@block["id"]} />
+      <div class="frame-header">
+        <span class="chip frame-name" title="Frame name — later cells can consume this frame">
+          {@block["name"]}
+        </span>
+        <span
+          :if={@cell_state == :stale}
+          class="chip frame-badge frame-badge-stale"
+          title="The cell (or an upstream cell) changed since this output was captured"
+        >
+          stale
+        </span>
+        <span :if={@cell_state == :never_run} class="chip frame-badge frame-badge-never">
+          not run yet
+        </span>
+        <span :if={@run && @run.status == "error"} class="chip frame-badge frame-badge-error">
+          error
+        </span>
+        <button
+          :if={@can_run?}
+          type="button"
+          class="frame-run-btn"
+          phx-click="run_cell"
+          phx-value-block-id={@block["id"]}
+          disabled={@cell_running?}
+        >
+          {if @cell_running?, do: "running…", else: "run"}
+        </button>
+      </div>
+      <%= case @rendered do %>
+        <% :never_run -> %>
+          <div class="frame-empty">No captured output yet — run the cell.</div>
+        <% {:ok, spec} -> %>
+          <div
+            id={@block["id"] <> "-frame-echart-" <> @run.id}
+            class="chart-plot"
+            phx-hook="Chart"
+            phx-update="ignore"
+            data-spec={Jason.encode!(spec)}
+          >
+          </div>
+        <% {:table, %{"columns" => cols, "rows" => rows}} -> %>
+          <div class="blk-table-wrap">
+            <table class="blk-table">
+              <thead>
+                <tr>
+                  <th :for={c <- cols}>{c}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={row <- rows}>
+                  <td :for={cell <- row}>{display_cell(cell)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        <% {:table, _} -> %>
+          <div class="chart-error">captured output has no rows to render</div>
+        <% {:error, msg} -> %>
+          <div class="chart-error">{msg}</div>
+      <% end %>
+      <div :if={@run} class="frame-caption chart-caption">
+        <span class="frame-provenance">
+          run v{version_number(@run)}
+          <span :if={actor_name(@run)}>by {actor_name(@run)}</span>
+          · {Calendar.strftime(@run.inserted_at, "%Y-%m-%d %H:%M UTC")}
+          <span :if={@run.duration_ms}>· {@run.duration_ms}ms</span>
+        </span>
+        <span :if={@run.truncated} class="chart-truncated">
+          truncated to first {Aveline.Frames.Executor.output_row_cap()} rows
+        </span>
+      </div>
+    </div>
+    """
+  end
 
   def block(assigns) do
     ~H"""
     <div class="blk-unknown">Unknown block type: {@block["type"]}</div>
     """
   end
-
 
   attr :id, :string, required: true
 
@@ -367,6 +560,14 @@ defmodule AvelineWeb.BlockRenderer do
   defp display_cell(nil), do: ""
   defp display_cell(v) when is_float(v), do: :erlang.float_to_binary(v, [:short])
   defp display_cell(v), do: to_string(v)
+
+  # Frame-run provenance helpers — associations may be unloaded when a
+  # run arrives via broadcast; both degrade to nothing rather than raise.
+  defp version_number(%{doc_version: %{version_number: n}}), do: n
+  defp version_number(_run), do: "?"
+
+  defp actor_name(%{actor_user: %{username: u}}), do: u
+  defp actor_name(_run), do: nil
 
   defp safe_text_with_marks(text, marks) do
     escaped = Phoenix.HTML.html_escape(text) |> Phoenix.HTML.safe_to_string()
