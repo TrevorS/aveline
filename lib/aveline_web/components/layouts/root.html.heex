@@ -696,6 +696,17 @@
         margin: 0 10px 0 0;
       }
 
+      /* Notebook kind marker — a quiet pill beside the title. */
+      .notebook-badge {
+        flex-shrink: 0;
+        margin-top: 8px;
+        font-size: 10.5px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.04em;
+        padding: 2px 7px; border-radius: 4px;
+        background: rgba(255,255,255,0.04);
+        color: var(--text-muted);
+      }
+
       /* Kudos toggle — icon-only, no count (no social-proof bias). */
       .article-kudos-btn {
         flex-shrink: 0;
@@ -891,18 +902,28 @@
       }
       .blocks .blk-code[data-lang=""] { padding-top: 14px; }
       .blocks .blk-code[data-lang=""]::before { content: none; }
-      .blocks .blk-table-wrap { overflow-x: auto; }
+      /* Data tables scroll in both directions (many columns, up to 500
+         rows) and keep their header pinned while the body scrolls. */
+      .blocks .blk-table-wrap {
+        overflow: auto; max-height: 24rem;
+        border: 1px solid var(--border); border-radius: var(--radius);
+      }
       .blocks .blk-table {
         width: 100%; border-collapse: collapse;
         font-size: 13px;
+      }
+      /* A standalone table block (not inside a scroll wrap) keeps its frame. */
+      .blocks > .blk-table, .blocks .blk-anchored > .blk-table {
         border: 1px solid var(--border); border-radius: var(--radius);
         overflow: hidden;
       }
       .blocks .blk-table th, .blocks .blk-table td {
         text-align: left; padding: 8px 12px;
         border-bottom: 1px solid var(--border);
+        white-space: nowrap;
       }
       .blocks .blk-table th {
+        position: sticky; top: 0; z-index: 1;
         background: var(--bg-card);
         font-weight: 600; color: var(--text-secondary);
         font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -1220,6 +1241,88 @@
       }
       /* "inline" tag: this chart's SQL is anonymous, not a named query. */
       .blocks .chart-inline { font-style: italic; opacity: 0.8; }
+
+      /* ── Notebook cells (frame + code): a bordered card with a header
+         strip, a scrollable output/source, and a caption — so a cell reads
+         as one distinct unit, Jupyter-style. ───────────────────────────── */
+      .blocks .blk-frame, .blocks .blk-code-cell {
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--bg-card); margin: 16px 0; overflow: hidden;
+      }
+      .blocks .frame-header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 6px 10px; min-height: 34px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-input, var(--bg-card));
+      }
+      .blocks .frame-name {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12.5px; font-weight: 600; color: var(--text-secondary);
+      }
+      .blocks .frame-badge {
+        font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.05em; padding: 1px 6px; border-radius: 999px;
+      }
+      .blocks .frame-badge-stale { color: var(--attn); background: rgba(224,145,80,0.14); }
+      .blocks .frame-badge-never { color: var(--text-muted); background: rgba(127,127,127,0.14); }
+      .blocks .frame-running {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 11.5px; color: var(--text-muted);
+      }
+      /* Tabs (data/sql/config) and the run control sit at the right edge. */
+      .blocks .frame-header .chart-tabs { margin: 0 0 0 auto; }
+      .blocks .blk-code-cell .frame-header .frame-run-btn,
+      .blocks .blk-code-cell .frame-header .frame-idle-note { margin-left: auto; }
+      .blocks .frame-run-btn {
+        font: inherit; font-size: 11.5px; font-weight: 600;
+        color: var(--text-secondary); background: none;
+        border: 1px solid var(--border); border-radius: 5px;
+        padding: 2px 10px; cursor: pointer;
+      }
+      .blocks .frame-run-btn:hover { color: var(--text); border-color: var(--border-strong); }
+      .blocks .frame-idle-note { font-size: 11px; color: var(--text-muted); }
+      /* Output + source areas. The code source sits flush inside the card. */
+      .blocks .frame-output, .blocks .frame-config,
+      .blocks .code-cell-result, .blocks .code-cell-stdout { padding: 12px; }
+      .blocks .blk-code-cell > pre.blk-code {
+        margin: 0; border: none; border-radius: 0; background: transparent;
+      }
+      .blocks .code-cell-pane-label {
+        font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px;
+      }
+      .blocks .code-cell-stdout + .code-cell-result,
+      .blocks .code-cell-result + .frame-caption { padding-top: 0; }
+      .blocks .code-cell-stdout pre.blk-code,
+      .blocks .code-cell-result pre.blk-code { margin: 0; }
+      /* The output area's own scroll wrap loses the double border. */
+      .blocks .frame-output .blk-table-wrap,
+      .blocks .code-cell-result .blk-table-wrap { border: none; }
+      .blocks .frame-placeholder {
+        padding: 22px 12px; text-align: center;
+        font-size: 12.5px; color: var(--text-muted);
+      }
+      .blocks .frame-caption {
+        display: flex; gap: 12px; align-items: center;
+        padding: 6px 12px; border-top: 1px solid var(--border);
+        font-size: 11px; color: var(--text-muted);
+      }
+      .blocks .frame-source { font-family: 'JetBrains Mono', monospace; }
+      .blocks .chart-truncated { color: var(--attn); }
+      /* config tab: a compact key/value table, not an uppercased data grid. */
+      .blocks .frame-config-table { width: auto; border: none; }
+      .blocks .frame-config-table th {
+        position: static; background: none;
+        text-transform: none; letter-spacing: 0; font-weight: 500;
+        font-size: 12px; color: var(--text-muted);
+        white-space: nowrap; width: 1%; vertical-align: top;
+      }
+      .blocks .frame-config-table td {
+        font-size: 12.5px; color: var(--text-secondary);
+      }
+      .blocks .cfg-dot { margin: 0 0.4em; color: var(--text-muted); }
+      .blocks .frame-config-table tr:last-child th,
+      .blocks .frame-config-table tr:last-child td { border-bottom: none; }
       .blocks .blk-unknown {
         padding: 10px 14px; border: 1px dashed var(--danger);
         border-radius: var(--radius); font-size: 13px; color: var(--danger);

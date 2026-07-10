@@ -65,6 +65,33 @@ defmodule AvelineWeb.ChartRenderer do
     end
   end
 
+  def spec(%{"columns" => cols, "rows" => rows}, %{"type" => "scatter"} = viz) do
+    x = viz["x"]
+    y = viz["y"]
+    color = viz["color"]
+
+    cond do
+      x not in cols ->
+        {:error, "column #{inspect(x)} not in result (has: #{Enum.join(cols, ", ")})"}
+
+      y not in cols ->
+        {:error, "column #{inspect(y)} not in result (has: #{Enum.join(cols, ", ")})"}
+
+      is_binary(color) and color not in cols ->
+        {:error, "color column #{inspect(color)} not in result (has: #{Enum.join(cols, ", ")})"}
+
+      rows == [] ->
+        {:error, "query returned no rows"}
+
+      not (numeric_series?(rows, Enum.find_index(cols, &(&1 == x))) and
+               numeric_series?(rows, Enum.find_index(cols, &(&1 == y)))) ->
+        {:error, "scatter needs numeric x and y"}
+
+      true ->
+        {:ok, %{"columns" => cols, "rows" => rows, "viz" => viz}}
+    end
+  end
+
   def spec(_result, _viz), do: {:error, "nothing to render"}
 
   # A plottable numeric series: nulls are allowed (ECharts renders them

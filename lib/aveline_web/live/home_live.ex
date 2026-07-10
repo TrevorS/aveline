@@ -7,6 +7,7 @@ defmodule AvelineWeb.HomeLive do
   """
   use AvelineWeb, :live_view
 
+  alias Aveline.Broadcasts
   alias Aveline.Comments
   alias Aveline.Docs
   alias Aveline.DocViews
@@ -20,6 +21,11 @@ defmodule AvelineWeb.HomeLive do
 
     case LiveSession.fetch_workspace_for_user(slug, user) do
       {:ok, ws} ->
+        # Live updates: doc writes fan out to the workspace docs topic, so
+        # "recently changed" (and the pinned/orientation shelves) stay
+        # current without a reload.
+        if connected?(socket), do: Broadcasts.subscribe(Broadcasts.workspace_docs_topic(ws.id))
+
         {:ok,
          assign(socket,
            page_title: "Aveline · #{ws.name}",
@@ -62,6 +68,24 @@ defmodule AvelineWeb.HomeLive do
     open = if socket.assigns.glossary_open == slug, do: nil, else: slug
     {:noreply, assign(socket, glossary_open: open)}
   end
+
+  # A doc in this workspace shipped a version / was deleted or restored:
+  # refresh the doc-derived shelves (recent changes, pinned, orientation)
+  # so the home page reflects it live.
+  @impl true
+  def handle_info({event, _doc}, socket)
+      when event in [:doc_created, :doc_updated, :doc_deleted, :doc_restored] do
+    ws = socket.assigns.workspace
+
+    {:noreply,
+     assign(socket,
+       orientation: Docs.get_orientation(ws.id),
+       pinned_docs: Docs.list_pinned(ws.id),
+       recent_changes: Docs.list_current(ws.id, sort: :recent, limit: 5)
+     )}
+  end
+
+  def handle_info(_other, socket), do: {:noreply, socket}
 
   defp open_glossary_row(_rows, nil), do: nil
   defp open_glossary_row(rows, slug), do: Enum.find(rows, &(&1.tag.slug == slug))

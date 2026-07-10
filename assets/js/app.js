@@ -160,13 +160,71 @@ const Hooks = {
       const present = xs.filter((v) => v !== null && v !== undefined)
       const temporal = present.length > 0 && present.every(isDate)
 
+      const palette = [accent, color("--attn", "#E09150"), "#8B5CF6", "#22C55E"]
+
+      // Scatter is its own shape: numeric x AND y (value axes), optional
+      // color column that splits points into one series per category.
+      if (spec.viz.type === "scatter") {
+        const yi = spec.columns.indexOf(spec.viz.y)
+        const ci = spec.viz.color ? spec.columns.indexOf(spec.viz.color) : -1
+        let scatterSeries
+        if (ci >= 0) {
+          const groups = new Map()
+          spec.rows.forEach((r) => {
+            const k = String(r[ci])
+            if (!groups.has(k)) groups.set(k, [])
+            groups.get(k).push([r[xi], r[yi]])
+          })
+          scatterSeries = [...groups.entries()].map(([name, data]) => ({
+            name,
+            type: "scatter",
+            data,
+            symbolSize: 9,
+          }))
+        } else {
+          scatterSeries = [
+            { type: "scatter", data: spec.rows.map((r) => [r[xi], r[yi]]), symbolSize: 9 },
+          ]
+        }
+        const axis = (name) => ({
+          type: "value",
+          name,
+          nameTextStyle: { color: muted, fontSize: 10.5 },
+          axisLine: { lineStyle: { color: border } },
+          axisLabel: { color: muted, fontSize: 10.5 },
+          splitLine: { lineStyle: { color: border, type: "dashed" } },
+          scale: true,
+        })
+        const scatterOption = {
+          animationDuration: 250,
+          grid: { left: 8, right: 12, top: ci >= 0 ? 24 : 16, bottom: 8, containLabel: true },
+          color: palette,
+          textStyle: { fontFamily: "inherit" },
+          tooltip: {
+            trigger: "item",
+            backgroundColor: color("--bg-card", "#17181C"),
+            borderColor: border,
+            textStyle: { color: text, fontSize: 12 },
+          },
+          xAxis: axis(spec.viz.x),
+          yAxis: axis(spec.viz.y),
+          legend:
+            ci >= 0
+              ? { top: 0, right: 0, textStyle: { color: muted, fontSize: 11 }, icon: "circle" }
+              : undefined,
+          series: scatterSeries,
+        }
+        if (!this.chart) this.chart = echarts.init(this.el)
+        this.chart.setOption(scatterOption, { notMerge: true })
+        return
+      }
+
       // Normalize: line/bar are sugar for a one-series combo.
       const seriesSpecs =
         spec.viz.type === "combo"
           ? spec.viz.series
           : [{ y: spec.viz.y, type: spec.viz.type }]
       const useRightAxis = seriesSpecs.some((s) => s.axis === "right")
-      const palette = [accent, color("--attn", "#E09150"), "#8B5CF6", "#22C55E"]
 
       const series = seriesSpecs.map((s) => {
         const yi = spec.columns.indexOf(s.y)

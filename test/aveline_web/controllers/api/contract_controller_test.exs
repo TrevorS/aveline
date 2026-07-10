@@ -22,8 +22,9 @@ defmodule AvelineWeb.Api.ContractControllerTest do
     assert body["ok"] == true
     contract = body["contract"]
     assert is_map(contract)
-    assert length(contract["block_types"]) == 7
+    assert length(contract["block_types"]) == 8
     assert Enum.any?(contract["block_types"], &(&1["type"] == "chart"))
+    assert Enum.any?(contract["block_types"], &(&1["type"] == "frame"))
     assert length(contract["operations"]) == 5
     assert contract["edit_modes"]["note"] =~ "exactly one"
   end

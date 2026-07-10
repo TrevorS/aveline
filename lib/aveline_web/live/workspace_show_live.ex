@@ -2,6 +2,7 @@ defmodule AvelineWeb.WorkspaceShowLive do
   @moduledoc false
   use AvelineWeb, :live_view
 
+  alias Aveline.Broadcasts
   alias Aveline.Docs
   alias Aveline.DocViews
   alias Aveline.Tags
@@ -16,6 +17,11 @@ defmodule AvelineWeb.WorkspaceShowLive do
 
     case LiveSession.fetch_workspace_for_user(slug, user) do
       {:ok, ws} ->
+        # Live updates: any doc write in this workspace fans out to the
+        # workspace docs topic (Broadcasts.publish_doc_event). Subscribe
+        # once the socket is connected so the list refetches in place.
+        if connected?(socket), do: Broadcasts.subscribe(Broadcasts.workspace_docs_topic(ws.id))
+
         {:ok,
          assign(socket,
            page_title: "Aveline · #{ws.name}",
@@ -93,17 +99,12 @@ defmodule AvelineWeb.WorkspaceShowLive do
       {selected_tags, group_by, sub_group_by, sort, selected_authors, search, edited_within} =
         if pristine? do
           {Map.get(config, "tags", []), Map.get(config, "group_by"),
-           parse_group(Map.get(config, "sub_group_by"), ws.id),
-           parse_sort(Map.get(config, "sort")), [], "",
+           parse_group(Map.get(config, "sub_group_by"), ws.id), parse_sort(Map.get(config, "sort")), [], "",
            Aveline.Docs.normalize_within(Map.get(config, "edited"))}
         else
-          {parse_tags(params["tag"]),
-           parse_group(params["group"], ws.id),
-           parse_group(params["subgroup"], ws.id),
-           parse_sort(params["sort"]),
-           parse_authors(params["author"], socket.assigns.workspace_authors),
-           params["q"] || "",
-           Aveline.Docs.normalize_within(params["edited"])}
+          {parse_tags(params["tag"]), parse_group(params["group"], ws.id), parse_group(params["subgroup"], ws.id),
+           parse_sort(params["sort"]), parse_authors(params["author"], socket.assigns.workspace_authors),
+           params["q"] || "", Aveline.Docs.normalize_within(params["edited"])}
         end
 
       # A sub-group only makes sense once a group is chosen, and it must
@@ -119,11 +120,33 @@ defmodule AvelineWeb.WorkspaceShowLive do
              edited_within != Aveline.Docs.normalize_within(Map.get(config, "edited")) or
              selected_authors != [] or search != "")
 
-      handle_docs_params(socket, current_view, selected_tags, group_by, sub_group_by, sort, selected_authors, search, edited_within, modified?)
+      handle_docs_params(
+        socket,
+        current_view,
+        selected_tags,
+        group_by,
+        sub_group_by,
+        sort,
+        selected_authors,
+        search,
+        edited_within,
+        modified?
+      )
     end
   end
 
-  defp handle_docs_params(socket, current_view, selected_tags, group_by, sub_group_by, sort, selected_authors, search, edited_within, modified?) do
+  defp handle_docs_params(
+         socket,
+         current_view,
+         selected_tags,
+         group_by,
+         sub_group_by,
+         sort,
+         selected_authors,
+         search,
+         edited_within,
+         modified?
+       ) do
     ws = socket.assigns.workspace
     page_size = socket.assigns.page_size
     owner_ids = author_ids(selected_authors, socket.assigns.workspace_authors)
@@ -188,6 +211,33 @@ defmodule AvelineWeb.WorkspaceShowLive do
          end
      )}
   end
+
+  # A doc was created / edited / deleted / restored somewhere in the
+  # workspace: refetch the list against the CURRENT knob state (view,
+  # tags, authors, grouping, sort, search — all held in assigns) so the
+  # page reflects the change without a reload. The tag vocabulary is
+  # refreshed too, so a tag arriving via a doc write shows up as a chip.
+  @impl true
+  def handle_info({event, _doc}, socket)
+      when event in [:doc_created, :doc_updated, :doc_deleted, :doc_restored] do
+    a = socket.assigns
+    socket = assign(socket, :workspace_tags, Docs.list_workspace_tags(a.workspace.id))
+
+    handle_docs_params(
+      socket,
+      a.current_view,
+      a.selected_tags,
+      a.group_by,
+      a.sub_group_by,
+      a.sort,
+      a.selected_authors,
+      a.search,
+      a.edited_within,
+      a.modified?
+    )
+  end
+
+  def handle_info(_other, socket), do: {:noreply, socket}
 
   # Columns for the grouped (kanban) rendering: the scope's members in
   # tag order, each with its docs; docs carrying no tag from the scope
@@ -373,7 +423,8 @@ defmodule AvelineWeb.WorkspaceShowLive do
     {:noreply,
      assign(socket,
        items: items,
-       sections: socket.assigns.group_by && grouped_sections(ws.id, socket.assigns.group_by, socket.assigns.sub_group_by, items),
+       sections:
+         socket.assigns.group_by && grouped_sections(ws.id, socket.assigns.group_by, socket.assigns.sub_group_by, items),
        view_counts: DocViews.counts_by_base(base_ids),
        kudos_counts: Kudos.counts_by_base(base_ids),
        chip_counts: items |> Enum.flat_map(& &1.tags) |> Enum.frequencies(),
@@ -801,7 +852,6 @@ defmodule AvelineWeb.WorkspaceShowLive do
     </div>
     """
   end
-
 
   attr :i, :map, required: true
   attr :ws, :map, required: true

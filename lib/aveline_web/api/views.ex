@@ -16,6 +16,7 @@ defmodule AvelineWeb.Api.Views do
 
   alias Aveline.Comments.Comment
   alias Aveline.Docs.Doc
+  alias Aveline.Runs.CellRun
 
   # ===== User =====
 
@@ -59,6 +60,7 @@ defmodule AvelineWeb.Api.Views do
       "tags" => d.tags || [],
       "pin_slot" => d.pin_slot,
       "orientation" => d.orientation,
+      "kind" => d.kind,
       "version_number" => d.version_number,
       "owner" => user(preload(d, :owner)),
       "updated_at" => iso(d.updated_at)
@@ -144,6 +146,30 @@ defmodule AvelineWeb.Api.Views do
         "user" => user(preload(d, :actor_user))
       },
       "inserted_at" => iso(d.inserted_at)
+    }
+  end
+
+  # ===== Cell run =====
+
+  @doc "A captured run of a notebook frame cell — output + provenance."
+  def cell_run(%CellRun{} = r) do
+    %{
+      "id" => r.id,
+      "base_doc_id" => r.base_doc_id,
+      "doc_version_id" => r.doc_version_id,
+      "block_id" => r.block_id,
+      "query_ref" => r.query_ref,
+      "status" => r.status,
+      "outputs" => r.outputs,
+      "truncated" => r.truncated,
+      "error_text" => r.error_text,
+      "snapshot_hash" => r.snapshot_hash,
+      "duration_ms" => r.duration_ms,
+      "actor" => %{
+        "type" => r.actor_type,
+        "user" => user(preload(r, :actor_user))
+      },
+      "ran_at" => iso(r.inserted_at)
     }
   end
 

@@ -54,6 +54,8 @@ defmodule AvelineWeb.Router do
     live "/w/:slug/v/:view_name", WorkspaceShowLive, :view
     live "/w/:slug/d/:doc_slug", DocShowLive, :show
     live "/w/:slug/d/:doc_slug/v/:version", DocShowLive, :show_version
+    # Notebooks share DocShowLive; the shell branches on item.kind.
+    live "/w/:slug/nb/:doc_slug", DocShowLive, :show
     live "/w/:slug/activity", ActivityLive, :index
     live "/w/:slug/usage", UsageLive, :index
     live "/w/:slug/data-sources", DataSourcesLive, :index
@@ -106,6 +108,11 @@ defmodule AvelineWeb.Router do
 
     # Run one chart block and get its rows (reads return config only).
     post "/docs/:doc_slug/blocks/:block_id/run", DocController, :run_block
+
+    # Notebook frame cells: run one (capturing a cell_run) and list its
+    # run history. Refused on non-notebook docs.
+    post "/docs/:doc_slug/cells/:block_id/run", DocController, :run_cell
+    get "/docs/:doc_slug/cells/:block_id/runs", DocController, :cell_runs
 
     # Comments
     get "/docs/:doc_slug/comments", CommentController, :index

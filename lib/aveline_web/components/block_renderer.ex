@@ -55,6 +55,143 @@ defmodule AvelineWeb.BlockRenderer do
     """
   end
 
+  # code cell — an executable Elixir cell inside a notebook. `annotate`
+  # marks it (`"cell" => true`) and echoes its latest run, staleness, and
+  # whether this deployment can run it. It never auto-runs: it shows the
+  # source (highlighted), the last captured stdout + result, a stale
+  # badge, and either a gated Run button or a quiet "execution disabled"
+  # note — so the same notebook renders fully in a non-local deployment.
+  def block(%{block: %{"type" => "code", "cell" => true}} = assigns) do
+    run = assigns.block["run"]
+    stale = assigns.block["stale"] || "never_run"
+    exec_enabled = assigns.block["exec_enabled"] == true
+    outputs = (run && run["outputs"]) || %{}
+    chart = outputs["chart"]
+
+    chart_rendered =
+      case chart do
+        %{"data" => data, "viz" => %{"type" => "table"} = _viz} -> {:table, data}
+        %{"data" => data, "viz" => viz} -> AvelineWeb.ChartRenderer.spec(data, viz)
+        _ -> nil
+      end
+
+    assigns =
+      assign(assigns,
+        run: run,
+        stale: stale,
+        exec_enabled: exec_enabled,
+        stdout: outputs["stdout"],
+        result: outputs["result"],
+        table: outputs["table"],
+        chart: chart,
+        chart_rendered: chart_rendered
+      )
+
+    ~H"""
+    <div id={@block["id"]} class="blk-frame blk-code-cell blk-anchored">
+      <.block_anchor id={@block["id"]} />
+      <div class="frame-header">
+        <span class="frame-name">{@block["name"] || "elixir"}</span>
+        <span :if={@stale == "stale"} class="frame-badge frame-badge-stale">stale</span>
+        <span :if={@stale == "never_run"} class="frame-badge frame-badge-never">never run</span>
+        <span :if={@block["running"]} class="frame-running">
+          <span class="chart-spinner"></span> running…
+        </span>
+        <button
+          :if={@exec_enabled}
+          type="button"
+          class="frame-run-btn"
+          phx-click="run_cell"
+          phx-value-block-id={@block["id"]}
+        >
+          ▶ Run
+        </button>
+        <span :if={!@exec_enabled} class="frame-idle-note" title="Enable DEPLOY_MODE=local to run code cells">
+          execution disabled in this deployment
+        </span>
+      </div>
+      <pre
+        id={@block["id"] <> "-src"}
+        class="blk-code"
+        data-lang="elixir"
+        phx-hook="HighlightCode"
+        phx-update="ignore"
+      ><code class="language-elixir">{@block["content"]}</code></pre>
+      <div :if={@run && @run["status"] == "error"} class="chart-error">{@run["error_text"] || "run failed"}</div>
+      <div :if={@stdout && @stdout != ""} class="code-cell-stdout">
+        <div class="code-cell-pane-label">stdout</div>
+        <pre class="blk-code"><code>{@stdout}</code></pre>
+      </div>
+      <div :if={@run && @run["status"] == "ok"} class="code-cell-result">
+        <div class="code-cell-pane-label">{if @chart, do: "plot", else: "result"}</div>
+        <%= cond do %>
+          <% @chart -> %>
+            <%= case @chart_rendered do %>
+              <% {:ok, spec} -> %>
+                <div
+                  id={@block["id"] <> "-plot"}
+                  class="chart-plot"
+                  phx-hook="Chart"
+                  phx-update="ignore"
+                  data-spec={Jason.encode!(spec)}
+                >
+                </div>
+              <% {:table, %{"columns" => cols, "rows" => rows}} -> %>
+                <div class="blk-table-wrap">
+                  <table class="blk-table">
+                    <thead>
+                      <tr>
+                        <th :for={c <- cols}>{c}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={row <- rows}>
+                        <td :for={cell <- row}>{cell}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              <% {:error, msg} -> %>
+                <div class="chart-error">{msg}</div>
+              <% _ -> %>
+                <div class="chart-error">could not render plot</div>
+            <% end %>
+          <% @table -> %>
+            <div class="blk-table-wrap">
+              <table class="blk-table">
+                <thead>
+                  <tr>
+                    <th :for={col <- @table["columns"] || []}>{col}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={row <- @table["rows"] || []}>
+                    <td :for={cell <- row}>{cell}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <span :if={@table["truncated"]} class="chart-truncated">
+              truncated to first 500 rows
+            </span>
+          <% true -> %>
+            <pre class="blk-code"><code>{@result}</code></pre>
+        <% end %>
+      </div>
+      <div :if={is_nil(@run)} class="frame-placeholder">
+        <%= if @exec_enabled do %>
+          This cell hasn't been run yet — press Run.
+        <% else %>
+          This cell hasn't been run. Running is disabled in this deployment.
+        <% end %>
+      </div>
+      <div :if={@run} class="frame-caption">
+        <span :if={@run["duration_ms"]} class="frame-duration">{@run["duration_ms"]}ms</span>
+      </div>
+    </div>
+    """
+  end
+
   def block(%{block: %{"type" => "code"}} = assigns) do
     lang = assigns.block["language"] || ""
     code_class = if lang == "", do: "", else: "language-" <> lang
@@ -308,6 +445,166 @@ defmodule AvelineWeb.BlockRenderer do
     """
   end
 
+  # frame — a notebook cell owning a catalog query. Unlike a chart it
+  # never auto-runs on read: it shows the LATEST CAPTURED run (from
+  # cell_runs, joined in at the read boundary) plus a derived stale badge
+  # and a Run button. `run` and `stale` are read-time echoes merged by
+  # Aveline.Runs.annotate.
+  def block(%{block: %{"type" => "frame"}} = assigns) do
+    run = assigns.block["run"]
+    viz = assigns.block["viz"] || %{"type" => "table"}
+    stale = assigns.block["stale"] || "never_run"
+
+    rendered =
+      cond do
+        is_nil(run) -> :never_run
+        run["status"] == "error" -> {:error, run["error_text"] || "run failed"}
+        viz["type"] == "table" -> {:table, run["outputs"]}
+        true -> AvelineWeb.ChartRenderer.spec(run["outputs"], viz)
+      end
+
+    outputs = (run && run["outputs"]) || %{}
+
+    assigns =
+      assign(assigns,
+        rendered: rendered,
+        run: run,
+        stale: stale,
+        viz: viz,
+        ncols: length(outputs["columns"] || []),
+        nrows: length(outputs["rows"] || [])
+      )
+
+    ~H"""
+    <div id={@block["id"]} class="blk-frame blk-anchored">
+      <.block_anchor id={@block["id"]} />
+      <div class="frame-header">
+        <span class="frame-name">{@block["name"]}</span>
+        <span :if={@stale == "stale"} class="frame-badge frame-badge-stale">stale</span>
+        <span :if={@stale == "never_run"} class="frame-badge frame-badge-never">never run</span>
+        <span :if={@block["running"]} class="frame-running">
+          <span class="chart-spinner"></span> running…
+        </span>
+        <div class="chart-tabs">
+          <button
+            type="button"
+            id={@block["id"] <> "-tab-viz"}
+            class="chart-tab chart-tab-active"
+            phx-click={frame_tab(@block["id"], "viz")}
+          >
+            data
+          </button>
+          <button
+            :if={@block["query_sql"]}
+            type="button"
+            id={@block["id"] <> "-tab-sql"}
+            class="chart-tab"
+            phx-click={frame_tab(@block["id"], "sql")}
+          >
+            sql
+          </button>
+          <button
+            type="button"
+            id={@block["id"] <> "-tab-config"}
+            class="chart-tab"
+            phx-click={frame_tab(@block["id"], "config")}
+          >
+            config
+          </button>
+        </div>
+        <button
+          type="button"
+          class="frame-run-btn"
+          phx-click="run_cell"
+          phx-value-block-id={@block["id"]}
+        >
+          ▶ Run
+        </button>
+      </div>
+      <div :if={@block["query_sql"]} id={@block["id"] <> "-pane-sql"} phx-update="ignore" hidden>
+        <pre
+          id={@block["id"] <> "-sqlcode"}
+          class="blk-code"
+          data-lang="sql"
+          phx-hook="HighlightCode"
+        ><code class="language-sql">{@block["query_sql"]}</code></pre>
+      </div>
+      <div id={@block["id"] <> "-pane-config"} class="frame-config" hidden>
+        <table class="blk-table frame-config-table">
+          <tbody>
+            <tr>
+              <th>name</th>
+              <td>{@block["name"]}</td>
+            </tr>
+            <tr>
+              <th>output</th>
+              <td>{viz_desc(@viz)}</td>
+            </tr>
+            <tr>
+              <th>query</th>
+              <td>
+                {@block["query_ref"]}<span :if={@block["query_kind"]} class="cfg-dot">·</span>{@block["query_kind"]}<span :if={@block["query_engine"]} class="cfg-dot">·</span>{@block["query_engine"]}
+              </td>
+            </tr>
+            <tr>
+              <th>last run</th>
+              <td :if={@run}>
+                {@nrows} rows × {@ncols} cols · {@run["duration_ms"]}ms · {@run["ran_at"]}<span :if={@run["truncated"]}>· truncated</span>
+              </td>
+              <td :if={is_nil(@run)}>never run</td>
+            </tr>
+            <tr>
+              <th>freshness</th>
+              <td>{@stale}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div id={@block["id"] <> "-pane-viz"} class="frame-output">
+        <%= case @rendered do %>
+          <% :never_run -> %>
+            <div class="frame-placeholder">This cell hasn't been run yet — press Run.</div>
+          <% {:error, msg} -> %>
+            <div class="chart-error">{msg}</div>
+          <% {:ok, spec} -> %>
+            <div
+              id={@block["id"] <> "-echart"}
+              class="chart-plot"
+              phx-hook="Chart"
+              phx-update="ignore"
+              data-spec={Jason.encode!(spec)}
+            >
+            </div>
+          <% {:table, %{"columns" => cols, "rows" => rows}} -> %>
+            <div class="blk-table-wrap">
+              <table class="blk-table">
+                <thead>
+                  <tr>
+                    <th :for={c <- cols}>{c}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={row <- rows}>
+                    <td :for={cell <- row}>{display_cell(cell)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% _ -> %>
+            <div class="chart-error">nothing to render</div>
+        <% end %>
+      </div>
+      <div :if={@run} class="frame-caption">
+        <span class="frame-source">{@block["query_ref"]}</span>
+        <span :if={@run["truncated"]} class="chart-truncated">
+          truncated to first {Aveline.DataSources.Runner.row_cap()} rows
+        </span>
+        <span :if={@run["duration_ms"]} class="frame-duration">{@run["duration_ms"]}ms</span>
+      </div>
+    </div>
+    """
+  end
+
   def block(assigns) do
     ~H"""
     <div class="blk-unknown">Unknown block type: {@block["type"]}</div>
@@ -425,6 +722,35 @@ defmodule AvelineWeb.BlockRenderer do
   # sql-formatter's closest supported profile is postgresql.
   defp sql_dialect(%{"adapter" => "workspace"}), do: "postgresql"
   defp sql_dialect(_), do: "sql"
+
+  # Client-only three-pane switch for frame cells (data / sql / config):
+  # show the clicked pane, hide the others, move the active class. A pane
+  # that doesn't exist (sql, when the frame has none) is simply not matched.
+  defp frame_tab(block_id, show) do
+    Enum.reduce(["viz", "sql", "config"], %Phoenix.LiveView.JS{}, fn pane, js ->
+      if pane == show do
+        js
+        |> Phoenix.LiveView.JS.show(to: "##{block_id}-pane-#{pane}")
+        |> Phoenix.LiveView.JS.add_class("chart-tab-active", to: "##{block_id}-tab-#{pane}")
+      else
+        js
+        |> Phoenix.LiveView.JS.hide(to: "##{block_id}-pane-#{pane}")
+        |> Phoenix.LiveView.JS.remove_class("chart-tab-active", to: "##{block_id}-tab-#{pane}")
+      end
+    end)
+  end
+
+  # A one-line description of what a frame renders, for the config tab.
+  defp viz_desc(%{"type" => "table"}), do: "table"
+
+  defp viz_desc(%{"type" => "combo", "x" => x, "series" => series}) do
+    parts = Enum.map_join(series, ", ", fn s -> "#{s["y"]} (#{s["type"]})" end)
+    "combo · x: #{x} · #{parts}"
+  end
+
+  defp viz_desc(%{"type" => type, "x" => x, "y" => y}), do: "#{type} chart · x: #{x} · y: #{y}"
+  defp viz_desc(%{"type" => type}), do: type
+  defp viz_desc(_), do: "table"
 
   # Client-only pane switch: show one pane, hide the other, move the
   # active class. No server round trip for a peek at the SQL.

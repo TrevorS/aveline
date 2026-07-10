@@ -68,6 +68,10 @@ defmodule AvelineWeb.DocShowLive do
               | blocks: Docs.enrich_blocks(showing.blocks || [], ws.id, run_charts: false)
             }
 
+            # Notebooks join each frame cell to its latest captured run +
+            # derived staleness (a read never executes a cell).
+            showing = Aveline.Runs.annotate(showing)
+
             showing = if is_historical, do: idle_charts(showing), else: showing
 
             # Comment view — single 3-state toggle:
@@ -243,6 +247,36 @@ defmodule AvelineWeb.DocShowLive do
 
       _ ->
         {:noreply, socket}
+    end
+  end
+
+  # Run (or re-run) one notebook frame cell. Captures a cell_run and
+  # re-annotates the rendered blocks with the fresh output + staleness.
+  # Read-only historical views never run.
+  def handle_event("run_cell", %{"block-id" => block_id}, socket) do
+    %{current_user: user, item: item, historical?: historical?} = socket.assigns
+
+    cond do
+      user == nil ->
+        {:noreply, put_flash(socket, :error, "Sign in to run cells.")}
+
+      historical? ->
+        {:noreply, socket}
+
+      true ->
+        case Aveline.Runs.run_cell(item, block_id, %{user_id: user.id, actor_type: "human"}) do
+          {:ok, _run} ->
+            # The fresh output lands via the :cell_run_finished broadcast
+            # (this viewer subscribes to its own doc topic), so every open
+            # viewer — runner included — re-annotates the cell one way.
+            {:noreply, socket}
+
+          {:error, :execution_disabled, msg} ->
+            {:noreply, put_flash(socket, :error, msg)}
+
+          _ ->
+            {:noreply, put_flash(socket, :error, "Could not run cell.")}
+        end
     end
   end
 
@@ -467,10 +501,12 @@ defmodule AvelineWeb.DocShowLive do
            versions: versions
          )}
       else
-        item = %{
-          new_current
-          | blocks: Docs.enrich_blocks(new_current.blocks || [], new_current.workspace_id, run_charts: false)
-        }
+        item =
+          %{
+            new_current
+            | blocks: Docs.enrich_blocks(new_current.blocks || [], new_current.workspace_id, run_charts: false)
+          }
+          |> Aveline.Runs.annotate()
 
         # Keep results for queries the new version still references,
         # drop the rest, and fire runs for anything newly added.
@@ -495,7 +531,47 @@ defmodule AvelineWeb.DocShowLive do
     end
   end
 
+  # A run started somewhere (this viewer or another): flag the cell so a
+  # second viewer shows a running state while the run executes.
+  def handle_info({:cell_run_started, %{base_doc_id: base, block_id: block_id}}, socket) do
+    if base == socket.assigns.current_doc.base_doc_id do
+      {:noreply, assign(socket, item: mark_cell_running(socket.assigns.item, block_id, true))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # The run landed: re-annotate the notebook so this cell picks up its
+  # fresh captured output + staleness (mirrors the local run path), and
+  # clear the running flag. Non-notebook / other-doc events no-op.
+  def handle_info({:cell_run_finished, %{base_doc_id: base, block_id: block_id}}, socket) do
+    if base == socket.assigns.current_doc.base_doc_id do
+      item =
+        socket.assigns.item
+        |> Aveline.Runs.annotate()
+        |> mark_cell_running(block_id, false)
+
+      {:noreply, assign(socket, item: item)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_other, socket), do: {:noreply, socket}
+
+  # Set/clear a transient "running" flag on one cell block. annotate/1
+  # rebuilds run + staleness but leaves this flag alone, so the finished
+  # handler clears it explicitly.
+  defp mark_cell_running(item, block_id, running?) do
+    %{
+      item
+      | blocks:
+          Enum.map(item.blocks || [], fn
+            %{"id" => ^block_id} = b -> Map.put(b, "running", running?)
+            b -> b
+          end)
+    }
+  end
 
   # ── async chart engine ─────────────────────────────────────────────
   # Charts never run in mount: the page renders placeholders instantly,
@@ -670,6 +746,7 @@ defmodule AvelineWeb.DocShowLive do
               </button>
             </span>
             <h1 class="article-title">{@item.title}</h1>
+            <span :if={@item.kind == "notebook"} class="notebook-badge">notebook</span>
             <%= if @current_user && @current_user.id != @current_doc.owner_id do %>
               <button
                 type="button"

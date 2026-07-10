@@ -9,6 +9,7 @@ defmodule AvelineWeb.Api.DocController do
   alias Aveline.Docs
   alias Aveline.DocViews
   alias Aveline.Kudos
+  alias Aveline.Runs
   alias AvelineWeb.Api.Envelope
   alias AvelineWeb.Api.Views
 
@@ -42,6 +43,9 @@ defmodule AvelineWeb.Api.DocController do
         # Reads return chart CONFIG, not data — a doc read never dials a
         # customer database. Agents fetch rows explicitly via run-block.
         item = %{item | blocks: Docs.enrich_blocks(item.blocks || [], ws.id, run_charts: false)}
+        # Notebooks join each frame cell to its latest captured run +
+        # derived staleness at the read boundary (never executes).
+        item = Runs.annotate(item)
         Envelope.ok(conn, %{doc: Views.doc_full(item)})
     end
   end
@@ -62,6 +66,9 @@ defmodule AvelineWeb.Api.DocController do
       item ->
         DocViews.record(ws.id, item.base_doc_id, user.id, "agent")
         item = %{item | blocks: Docs.enrich_blocks(item.blocks || [], ws.id, run_charts: false)}
+        # Notebooks join each frame cell to its latest captured run +
+        # derived staleness at the read boundary (never executes).
+        item = Runs.annotate(item)
         Envelope.ok(conn, %{doc: Views.doc_full(item)})
     end
   end
@@ -87,6 +94,53 @@ defmodule AvelineWeb.Api.DocController do
     Enum.find(blocks || [], &(&1["type"] == "chart" and &1["id"] == block_id))
   end
 
+  @doc """
+  Run one notebook frame cell, capturing a `cell_run` (its output,
+  provenance, and snapshot hash), and echo the run. Refused on
+  non-notebook docs. Error runs are recorded too and come back with
+  status "error" rather than an envelope failure.
+  """
+  def run_cell(conn, %{"doc_slug" => slug, "block_id" => block_id}) do
+    ws = conn.assigns.current_workspace
+    user = conn.assigns.current_user
+
+    with %_{} = doc <- Docs.get_current_by_slug(ws.id, slug) || {:error, :not_found},
+         :ok <- ensure_notebook(doc),
+         {:ok, run} <- Runs.run_cell(doc, block_id, %{user_id: user.id, actor_type: "agent"}) do
+      Envelope.ok(conn, %{cell_run: Views.cell_run(run)})
+    end
+  end
+
+  @doc "The latest runs for one frame cell (newest first). Notebook only."
+  def cell_runs(conn, %{"doc_slug" => slug, "block_id" => block_id} = params) do
+    ws = conn.assigns.current_workspace
+
+    with %_{} = doc <- Docs.get_current_by_slug(ws.id, slug) || {:error, :not_found},
+         :ok <- ensure_notebook(doc) do
+      runs = Runs.list_for_cell(doc.base_doc_id, block_id, parse_run_limit(params["limit"]))
+      Envelope.ok(conn, %{cell_runs: Enum.map(runs, &Views.cell_run/1)})
+    end
+  end
+
+  # Cell runs are a notebook concept — refuse on ordinary docs with a
+  # clear, branchable code rather than a confusing not-found.
+  defp ensure_notebook(%{kind: "notebook"}), do: :ok
+
+  defp ensure_notebook(%{kind: kind}),
+    do: {:error, :not_a_notebook, "cell runs are only available on notebooks (kind: notebook); this doc is a #{kind}"}
+
+  defp parse_run_limit(nil), do: 20
+  defp parse_run_limit(n) when is_integer(n) and n > 0, do: min(n, 100)
+
+  defp parse_run_limit(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} when n > 0 -> min(n, 100)
+      _ -> 20
+    end
+  end
+
+  defp parse_run_limit(_), do: 20
+
   # ===== Writes =====
 
   @doc """
@@ -108,6 +162,7 @@ defmodule AvelineWeb.Api.DocController do
   def create(conn, params) do
     ws = conn.assigns.current_workspace
     user = conn.assigns.current_user
+    kind = params["kind"] || "doc"
 
     attrs = %{
       title: params["title"],
@@ -115,6 +170,7 @@ defmodule AvelineWeb.Api.DocController do
       summary: params["summary"],
       tags: params["tags"] || [],
       blocks: params["blocks"] || [],
+      kind: kind,
       workspace_id: ws.id,
       owner_id: user.id,
       actor_user_id: user.id,
@@ -122,7 +178,8 @@ defmodule AvelineWeb.Api.DocController do
       intent: params["intent"]
     }
 
-    with {:ok, item} <- Docs.create_doc(attrs) do
+    with :ok <- validate_kind(kind),
+         {:ok, item} <- Docs.create_doc(attrs) do
       Envelope.ok(conn, %{
         slug: item.slug,
         doc_id: item.base_doc_id,
@@ -211,6 +268,14 @@ defmodule AvelineWeb.Api.DocController do
       end
     end
   end
+
+  # kind is set once at creation and is immutable thereafter — reject an
+  # unknown value up front with a clear envelope rather than letting the
+  # changeset CHECK surface a generic validation error.
+  defp validate_kind(kind) when kind in ["doc", "notebook"], do: :ok
+
+  defp validate_kind(kind),
+    do: {:error, :bad_request, "kind must be \"doc\" or \"notebook\", got: #{inspect(kind)}"}
 
   # Exactly one of blocks / operations. Both is ambiguous (which wins?);
   # neither is a no-op edit — reject both so the agent gets a clear error
