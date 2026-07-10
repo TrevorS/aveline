@@ -7,6 +7,11 @@ if System.get_env("PHX_SERVER") do
   config :aveline, AvelineWeb.Endpoint, server: true
 end
 
+# Deploy mode: "local" (single-user Docker: first boot seeds a user + API
+# token) or "cloud" (default: multi-user, invite-based). Read here so it
+# applies in every environment; consumed via Aveline.Config.local_mode?/0.
+config :aveline, :deploy_mode, System.get_env("DEPLOY_MODE") || "cloud"
+
 # Logging — stdout, captured by Fly. Sentry handles errors + Logs.
 if config_env() == :prod do
   config :logger, level: :info

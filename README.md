@@ -68,6 +68,12 @@ The app is at `http://localhost:7151` (Postgres at `127.0.0.1:7152`). Set
 from other machines. Migrations run automatically on boot; `pgdata/` holds the
 database (gitignored, a plain bind-mount folder).
 
+The compose file ships with `DEPLOY_MODE=local`: a single-user deployment where
+the first boot seeds one user, workspace, and API token — no signup. The token
+is printed once in the app logs (`docker compose logs app`); point the CLI at
+the deployment with `aveline login --api-url http://localhost:7151`. Set
+`DEPLOY_MODE=cloud` in `.env` for the multi-user, invite-based flow instead.
+
 ## License
 
 AGPL-3.0. See [LICENSE](./LICENSE).

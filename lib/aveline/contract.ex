@@ -88,13 +88,19 @@ defmodule Aveline.Contract do
       },
       %{
         "type" => "code",
-        "summary" => "A code block.",
+        "summary" => "A code block. In a notebook, an elixir code block is also an executable cell.",
         "example" => %{
           "type" => "code",
           "language" => "elixir",
           "content" => "IO.puts(\"hi\")"
         },
-        "notes" => ["content is a plain string. language may be null."]
+        "notes" => [
+          "content is a plain string (the source). language may be null.",
+          "Optional name is a snake_case label for the cell.",
+          "In a kind=notebook doc, a language:\"elixir\" code block is an executable cell: it captures runs (stdout + result) like a frame, and reads echo the latest run + a derived staleness flag. Run one via POST .../cells/:block_id/run.",
+          "Code-cell execution is gated to local deployments (DEPLOY_MODE=local); elsewhere the cell renders source + last output with running disabled, so notebooks stay portable.",
+          "Data bridges in a cell (each returns %{columns, rows}, with a _df twin returning an Explorer.DataFrame): query(\"name\") reads a catalog query; sql(\"SELECT …\") runs ad-hoc DuckDB over the catalog; from_source(\"src\", \"SELECT …\") runs raw SQL against an external data source. Explorer.DataFrame (aliased DF) and Explorer.Series are in scope. Returning a DataFrame/Series renders as a table; plot(data, type: :bar, x: \"…\", y: \"…\") renders a chart. ML/stats: Nx, Scholar (regression/clustering/PCA/metrics), and Statistics are available; to_tensor(df_or_series) bridges Explorer data into an Nx tensor for Scholar. db(queryable)/db_df(queryable) run an Ecto query (Ecto.Query is imported) against the app's own database instead of a SQL string; sql/1 and from_source/2 also accept an Ecto query (a schemaless `from c in \"catalog_query\"`) in place of a SQL string, rendering it to SQL. A list of maps (e.g. an Ecto result) also renders as a table. materialize(\"name\", data) saves a computed DataFrame/rows back to the catalog as a named query, so a later frame or cell can reference it by name (bounded by the catalog SQL size limit)."
+        ]
       },
       %{
         "type" => "list",
@@ -152,9 +158,27 @@ defmodule Aveline.Contract do
         "notes" => [
           "query_ref names a catalog query — create it first (create-query), then chart it. Charts carry no SQL; the query owns it.",
           "A raw query runs against its data source; a derived query composes other queries in the analytics engine.",
-          "viz.type is table | line | bar | combo. line/bar need x and y column names.",
+          "viz.type is table | line | bar | combo | scatter. line/bar/scatter need x and y column names; scatter x and y must be numeric and it takes an optional color (categorical column).",
           "combo needs x and 1-4 series: [{y: <col>, type: line|bar, axis?: left|right}].",
           "Reads gain a computed result (columns/rows or an error) — never write result back."
+        ]
+      },
+      %{
+        "type" => "frame",
+        "summary" => "A notebook cell that owns a catalog query and captures its output on demand. Notebook docs only.",
+        "example" => %{
+          "type" => "frame",
+          "name" => "high_value_orders",
+          "query_ref" => "orders_by_day",
+          "viz" => %{"type" => "table"}
+        },
+        "notes" => [
+          "Frame cells are only valid in kind=notebook docs.",
+          "name is a snake_case identifier — the cell's identity, and the name a created query takes.",
+          "Carry EXACTLY ONE of query_ref (an existing catalog query name) or query (inline SQL).",
+          "Inline form: {name, query: <sql>, source?: <data-source name>}. With source the cell is a RAW query on that source; without it, a DERIVED query over other catalog queries. The server creates the query (named after the cell) and stores query_ref.",
+          "viz.type is table | line | bar | combo | scatter, same grammar as chart.",
+          "Reads echo the latest captured run + a derived staleness flag; they never execute. Run a cell via POST .../cells/:block_id/run."
         ]
       }
     ]
@@ -238,8 +262,7 @@ defmodule Aveline.Contract do
         %{
           "action" => "leave",
           "fields" => "comment_id, note (optional)",
-          "means" =>
-            "Keep it open. Not allowed if the anchor block was deleted — resolve or reanchor instead."
+          "means" => "Keep it open. Not allowed if the anchor block was deleted — resolve or reanchor instead."
         }
       ],
       "example" => [

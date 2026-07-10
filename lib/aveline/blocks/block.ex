@@ -38,7 +38,7 @@ defmodule Aveline.Blocks.Block do
   alias Aveline.Blocks.Id
   alias Aveline.Blocks.Inline
 
-  @types ~w(heading paragraph code list table doc_link chart)
+  @types ~w(heading paragraph code list table doc_link chart frame)
 
   @uuid_re ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   # Chart query_ref is a catalog query name (same charset as Query.name).
@@ -148,7 +148,11 @@ defmodule Aveline.Blocks.Block do
     {:error, "paragraph requires content (list of inline spans)"}
   end
 
-  # code
+  # code — a code block. Statically rendered anywhere (prose fenced code);
+  # inside a kind=notebook doc a `language: "elixir"` code block is also an
+  # executable cell (run surface + cell_runs), gated to local deploy mode
+  # at run time — the block shape is identical, execution is a runtime
+  # capability, so notebooks stay portable. Optional `name` labels the cell.
   defp validate_type_fields("code", %{"content" => content} = block) when is_binary(content) do
     lang =
       case Map.get(block, "language") do
@@ -158,14 +162,28 @@ defmodule Aveline.Blocks.Block do
         _ -> :error
       end
 
-    if lang == :error do
-      {:error, "code.language must be a string or null"}
-    else
-      out =
-        %{"content" => content}
-        |> then(fn m -> if lang, do: Map.put(m, "language", lang), else: Map.put(m, "language", nil) end)
+    name =
+      case Map.get(block, "name") do
+        nil -> nil
+        "" -> nil
+        s when is_binary(s) -> s
+        _ -> :error
+      end
 
-      {:ok, out}
+    cond do
+      lang == :error ->
+        {:error, "code.language must be a string or null"}
+
+      name == :error ->
+        {:error, "code.name must be a string or null"}
+
+      is_binary(name) and not Regex.match?(@query_name_re, name) ->
+        {:error,
+         "code.name must be a snake_case identifier: lowercase letter first, then letters/digits/underscores (40 max)"}
+
+      true ->
+        out = %{"content" => content, "language" => lang}
+        {:ok, if(name, do: Map.put(out, "name", name), else: out)}
     end
   end
 
@@ -251,8 +269,7 @@ defmodule Aveline.Blocks.Block do
 
     cond do
       not Regex.match?(@query_name_re, ref) ->
-        {:error,
-         "chart.query_ref must be a catalog query name (lowercase letter, then letters/digits/underscores)"}
+        {:error, "chart.query_ref must be a catalog query name (lowercase letter, then letters/digits/underscores)"}
 
       true ->
         case validate_and_clean_viz(viz) do
@@ -263,8 +280,43 @@ defmodule Aveline.Blocks.Block do
   end
 
   defp validate_type_fields("chart", _) do
-    {:error,
-     "chart requires query_ref (a catalog query name; create the query first, then chart it) and optional viz"}
+    {:error, "chart requires query_ref (a catalog query name; create the query first, then chart it) and optional viz"}
+  end
+
+  # frame — a notebook cell that owns a catalog query. `name` is the
+  # cell's identity (and the name a created query takes); the cell carries
+  # EXACTLY ONE OF `query_ref` (an existing catalog query name) or `query`
+  # (inline SQL — with an optional `source` naming a data source for a RAW
+  # cell, absent => DERIVED). The Docs write path turns an inline cell into
+  # a catalog query and rewrites it to the query_ref form, and gates frames
+  # to kind=notebook docs; this validator stays pure. `viz` reuses the
+  # chart grammar. The run echoes (result/source/query_sql) are not fields
+  # here, so pasted echoes are stripped on rewrite — same as chart.
+  defp validate_type_fields("frame", %{"name" => name} = block) when is_binary(name) do
+    has_ref? = Map.has_key?(block, "query_ref")
+    has_query? = Map.has_key?(block, "query")
+
+    cond do
+      not Regex.match?(@query_name_re, name) ->
+        {:error,
+         "frame.name must be a table-safe identifier: lowercase letter first, then letters/digits/underscores (40 max)"}
+
+      has_ref? and has_query? ->
+        {:error, "frame carries exactly one of query_ref (an existing catalog query) or query (inline SQL) — not both"}
+
+      has_ref? ->
+        validate_frame_ref(name, block["query_ref"], Map.get(block, "viz", %{"type" => "table"}))
+
+      has_query? ->
+        validate_frame_inline(name, block, Map.get(block, "viz", %{"type" => "table"}))
+
+      true ->
+        {:error, "frame requires query_ref (an existing catalog query name) or query (inline SQL to author the cell)"}
+    end
+  end
+
+  defp validate_type_fields("frame", _) do
+    {:error, "frame requires name (a snake_case identifier) and exactly one of query_ref or query (inline SQL)"}
   end
 
   # ===== Helpers (placed after all validate_type_fields clauses so the
@@ -273,16 +325,15 @@ defmodule Aveline.Blocks.Block do
   # Shared chart viz validation + normalization (drops unknown keys).
   defp validate_and_clean_viz(viz) do
     cond do
-      not is_map(viz) or viz["type"] not in ["table", "line", "bar", "combo"] ->
-        {:error, "chart.viz.type must be \"table\", \"line\", \"bar\", or \"combo\""}
+      not is_map(viz) or viz["type"] not in ["table", "line", "bar", "combo", "scatter"] ->
+        {:error, "chart.viz.type must be \"table\", \"line\", \"bar\", \"combo\", or \"scatter\""}
 
-      viz["type"] in ["line", "bar"] and
+      viz["type"] in ["line", "bar", "scatter"] and
           not (is_binary(viz["x"]) and viz["x"] != "" and is_binary(viz["y"]) and viz["y"] != "") ->
-        {:error, "chart.viz needs x and y (column names) for line/bar"}
+        {:error, "chart.viz needs x and y (column names) for line/bar/scatter"}
 
       viz["type"] == "combo" and not valid_combo_series?(viz) ->
-        {:error,
-         "chart.viz combo needs x and series: 1-4 of {y: column, type: line | bar, axis?: left | right}"}
+        {:error, "chart.viz combo needs x and series: 1-4 of {y: column, type: line | bar, axis?: left | right}"}
 
       true ->
         clean =
@@ -300,6 +351,13 @@ defmodule Aveline.Blocks.Block do
                     if s["axis"] == "right", do: Map.put(base, "axis", "right"), else: base
                   end)
               }
+
+            "scatter" ->
+              base = %{"type" => "scatter", "x" => viz["x"], "y" => viz["y"]}
+              # Optional: color points by a categorical column (one series each).
+              if is_binary(viz["color"]) and viz["color"] != "",
+                do: Map.put(base, "color", viz["color"]),
+                else: base
 
             t ->
               %{"type" => t, "x" => viz["x"], "y" => viz["y"]}
@@ -322,6 +380,49 @@ defmodule Aveline.Blocks.Block do
   end
 
   defp valid_combo_series?(_), do: false
+
+  # A frame referencing an existing catalog query by name; the Docs write
+  # path verifies it resolves (Block stays pure).
+  defp validate_frame_ref(name, ref, viz) when is_binary(ref) do
+    if Regex.match?(@query_name_re, ref) do
+      case validate_and_clean_viz(viz) do
+        {:ok, clean} -> {:ok, %{"name" => name, "query_ref" => String.downcase(ref), "viz" => clean}}
+        err -> err
+      end
+    else
+      {:error, "frame.query_ref must be a catalog query name (lowercase letter, then letters/digits/underscores)"}
+    end
+  end
+
+  defp validate_frame_ref(_name, _ref, _viz),
+    do: {:error, "frame.query_ref must be a string (a catalog query name)"}
+
+  # A frame authoring its own query inline. `query` is opaque SQL (parsed
+  # at create time by the catalog, not here); `source` is an optional data
+  # source name (present => RAW cell, absent => DERIVED). The Docs write
+  # path creates the catalog query and rewrites this to the query_ref form.
+  defp validate_frame_inline(name, block, viz) do
+    sql = block["query"]
+    source = Map.get(block, "source")
+
+    cond do
+      not (is_binary(sql) and String.trim(sql) != "") ->
+        {:error, "frame.query must be a non-empty SQL string"}
+
+      not (is_nil(source) or (is_binary(source) and source != "")) ->
+        {:error, "frame.source, when present, must be a data source name (string)"}
+
+      true ->
+        case validate_and_clean_viz(viz) do
+          {:ok, clean} ->
+            base = %{"name" => name, "query" => sql, "viz" => clean}
+            {:ok, if(source, do: Map.put(base, "source", source), else: base)}
+
+          err ->
+            err
+        end
+    end
+  end
 
   defp validate_list_items(items) do
     Enum.reduce_while(items, {:ok, []}, fn raw_item, {:ok, acc} ->

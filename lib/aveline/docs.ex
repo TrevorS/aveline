@@ -653,6 +653,8 @@ defmodule Aveline.Docs do
         tags: Map.get(attrs, :tags, []),
         # Internal-only (workspace seeding) — not exposed through the API.
         orientation: Map.get(attrs, :orientation, false),
+        # "doc" | "notebook" — set once here, immutable across versions.
+        kind: Map.get(attrs, :kind, "doc"),
         owner_id: Map.fetch!(attrs, :owner_id),
         actor_user_id: Map.fetch!(attrs, :actor_user_id),
         actor_type: Map.fetch!(attrs, :actor_type)
@@ -669,10 +671,11 @@ defmodule Aveline.Docs do
   def apply_ops(:new, ops, base_attrs, opts) when is_list(ops) and is_map(base_attrs) do
     ws_id = Map.fetch!(base_attrs, :workspace_id)
     tags = Map.get(base_attrs, :tags, []) || []
+    ctx = resolve_ctx(Map.get(base_attrs, :kind, "doc"), Map.get(base_attrs, :actor_user_id))
 
     with :ok <- Tags.ensure_all_exist(ws_id, tags),
          :ok <- Tags.ensure_no_scope_conflict(tags),
-         {:ok, ops} <- resolve_doc_links(ops, ws_id),
+         {:ok, ops} <- resolve_doc_links(ops, ws_id, ctx),
          {:ok, new_blocks} <- run_document_apply([], ops) do
       insert_version(:new, new_blocks, ops, base_attrs, opts)
     end
@@ -681,14 +684,19 @@ defmodule Aveline.Docs do
   def apply_ops(%Doc{} = current, ops, update_attrs, opts)
       when is_list(ops) and is_map(update_attrs) do
     tags = Map.get(update_attrs, :tags, current.tags) || []
+    ctx = resolve_ctx(current.kind, Map.get(update_attrs, :actor_user_id))
 
     with :ok <- Tags.ensure_all_exist(current.workspace_id, tags),
          :ok <- Tags.ensure_no_scope_conflict(tags),
-         {:ok, ops} <- resolve_doc_links(ops, current.workspace_id),
+         {:ok, ops} <- resolve_doc_links(ops, current.workspace_id, ctx),
          {:ok, new_blocks} <- run_document_apply(current.blocks || [], ops) do
       insert_version(current, new_blocks, ops, update_attrs, opts)
     end
   end
+
+  # The write-path resolution context: the doc kind (frames are notebook-
+  # only) and the acting user (created queries are attributed to them).
+  defp resolve_ctx(kind, user_id), do: %{kind: kind || "doc", user_id: user_id}
 
   @doc """
   Ship a new version from a full desired block array (the `--blocks` /
@@ -713,9 +721,11 @@ defmodule Aveline.Docs do
     ws_id = current.workspace_id
     tags = Map.get(update_attrs, :tags, current.tags) || []
 
+    ctx = resolve_ctx(current.kind, Map.get(update_attrs, :actor_user_id))
+
     with :ok <- Tags.ensure_all_exist(ws_id, tags),
          :ok <- Tags.ensure_no_scope_conflict(tags),
-         {:ok, new_blocks} <- normalize_replacement_blocks(desired, ws_id),
+         {:ok, new_blocks} <- normalize_replacement_blocks(desired, ws_id, ctx),
          :ok <- ensure_unique_block_ids(new_blocks) do
       ops = diff_ops(current.blocks || [], new_blocks)
       insert_version(current, new_blocks, ops, update_attrs, opts)
@@ -726,9 +736,9 @@ defmodule Aveline.Docs do
   # ids — one block at a time, halting on the first bad block. Mirrors the
   # per-op path (resolve THEN validate) so `--blocks` and `--ops` accept
   # the exact same block shapes.
-  defp normalize_replacement_blocks(desired, ws_id) do
+  defp normalize_replacement_blocks(desired, ws_id, ctx) do
     Enum.reduce_while(desired, {:ok, []}, fn raw, {:ok, acc} ->
-      with {:ok, block} <- resolve_block_doc_link(stringify_block(raw), ws_id),
+      with {:ok, block} <- resolve_block_doc_link(stringify_block(raw), ws_id, ctx),
            {:ok, normalized} <- Block.validate(block, mint_id?: true) do
         {:cont, {:ok, acc ++ [normalized]}}
       else
@@ -786,51 +796,56 @@ defmodule Aveline.Docs do
   # doc_id. The stored ops are the resolved ones: version replay stays
   # deterministic even if a slug is later reused.
 
-  defp resolve_doc_links(ops, workspace_id) when is_list(ops) do
+  defp resolve_doc_links(ops, workspace_id, ctx) when is_list(ops) do
     Enum.reduce_while(ops, {:ok, []}, fn op, {:ok, acc} ->
-      case resolve_op_doc_link(op, workspace_id) do
+      case resolve_op_doc_link(op, workspace_id, ctx) do
         {:ok, resolved} -> {:cont, {:ok, acc ++ [resolved]}}
         err -> {:halt, err}
       end
     end)
   end
 
-  defp resolve_doc_links(ops, _workspace_id), do: {:ok, ops}
+  defp resolve_doc_links(ops, _workspace_id, _ctx), do: {:ok, ops}
 
-  defp resolve_op_doc_link(%{"op" => o, "block" => %{} = block} = op, ws_id)
+  defp resolve_op_doc_link(%{"op" => o, "block" => %{} = block} = op, ws_id, ctx)
        when o in ["append_block", "insert_block"] do
-    with {:ok, block} <- resolve_block_doc_link(block, ws_id) do
+    with {:ok, block} <- resolve_block_doc_link(block, ws_id, ctx) do
       {:ok, Map.put(op, "block", block)}
     end
   end
 
-  defp resolve_op_doc_link(%{"op" => "modify_block", "patch" => %{} = patch} = op, ws_id) do
-    with {:ok, patch} <- resolve_block_doc_link(patch, ws_id) do
+  defp resolve_op_doc_link(%{"op" => "modify_block", "patch" => %{} = patch} = op, ws_id, ctx) do
+    with {:ok, patch} <- resolve_block_doc_link(patch, ws_id, ctx) do
       {:ok, Map.put(op, "patch", patch)}
     end
   end
 
-  defp resolve_op_doc_link(op, _ws_id), do: {:ok, op}
+  defp resolve_op_doc_link(op, _ws_id, _ctx), do: {:ok, op}
 
   # Works on full blocks and modify_block patches alike: resolve the
-  # block-level target (doc_link doc/doc_id, chart source), then every
-  # span-level link in whatever span-carrying fields are present.
-  defp resolve_block_doc_link(%{} = block, ws_id) do
-    with {:ok, block} <- resolve_block_target(block, ws_id) do
+  # block-level target (doc_link doc/doc_id, chart source, frame query),
+  # then every span-level link in whatever span-carrying fields are present.
+  defp resolve_block_doc_link(%{} = block, ws_id, ctx) do
+    with {:ok, block} <- resolve_block_target(block, ws_id, ctx) do
       resolve_span_links(block, ws_id)
     end
   end
 
   # Chart blocks may arrive with `source` (a data source name) instead
   # of `data_source_id`; resolve and verify like doc_link targets.
-  defp resolve_block_target(%{"type" => "chart"} = block, ws_id),
+  defp resolve_block_target(%{"type" => "chart"} = block, ws_id, _ctx),
     do: resolve_chart_source(block, ws_id)
 
-  defp resolve_block_target(%{"type" => t} = block, _ws_id)
+  # Frame cells (notebook-only): gate the kind, verify a query_ref, or
+  # create-then-reference an inline query. See resolve_frame.
+  defp resolve_block_target(%{"type" => "frame"} = block, ws_id, ctx),
+    do: resolve_frame(block, ws_id, ctx)
+
+  defp resolve_block_target(%{"type" => t} = block, _ws_id, _ctx)
        when is_binary(t) and t != "doc_link",
        do: {:ok, block}
 
-  defp resolve_block_target(%{"doc" => slug} = block, ws_id) when is_binary(slug) do
+  defp resolve_block_target(%{"doc" => slug} = block, ws_id, _ctx) when is_binary(slug) do
     case get_current_by_slug(ws_id, slug) do
       nil ->
         {:error, :doc_link_target_not_found, "doc_link target not found in this workspace: #{slug}"}
@@ -840,7 +855,7 @@ defmodule Aveline.Docs do
     end
   end
 
-  defp resolve_block_target(%{"doc_id" => doc_id} = block, ws_id) when is_binary(doc_id) do
+  defp resolve_block_target(%{"doc_id" => doc_id} = block, ws_id, _ctx) when is_binary(doc_id) do
     case Ecto.UUID.cast(doc_id) do
       # Not UUID-shaped: pass through so Block.validate rejects it with the
       # schema error instead of this query raising a CastError.
@@ -854,12 +869,13 @@ defmodule Aveline.Docs do
     end
   end
 
-  # Typeless modify_block patches: `query_ref` is the chart key
-  # (doc_link patches use `doc`/`doc_id` and match above).
-  defp resolve_block_target(%{"query_ref" => ref} = patch, ws_id) when is_binary(ref),
+  # Typeless modify_block patches: `query_ref` is the chart/frame key
+  # (doc_link patches use `doc`/`doc_id` and match above). Verifying the
+  # referenced query resolves is the right check for both.
+  defp resolve_block_target(%{"query_ref" => ref} = patch, ws_id, _ctx) when is_binary(ref),
     do: resolve_chart_source(patch, ws_id)
 
-  defp resolve_block_target(block, _ws_id), do: {:ok, block}
+  defp resolve_block_target(block, _ws_id, _ctx), do: {:ok, block}
 
   # A chart references a catalog query by name; verify it resolves (like
   # a doc_link target). The query owns the SQL and the source, so the
@@ -876,6 +892,103 @@ defmodule Aveline.Docs do
   end
 
   defp resolve_chart_source(block, _ws_id), do: {:ok, block}
+
+  # A frame cell is notebook-only. Gate the kind here (Block validation
+  # stays pure), then bind the cell to a catalog query:
+  #   * query_ref form — verify the named query resolves (like a chart).
+  #   * inline form (query [+ source]) — create the catalog query named
+  #     after the cell and rewrite the block to carry query_ref. Name
+  #     collisions get a deterministic numeric suffix (cell → cell_2 …).
+  # The query is created before the doc version is inserted; a failed doc
+  # write leaves the query behind (harmless — create-then-reference, same
+  # as a chart pointing at a pre-existing query).
+  defp resolve_frame(_block, _ws_id, %{kind: kind}) when kind != "notebook" do
+    {:error, :frame_requires_notebook,
+     "frame cells are only allowed in notebooks (create the doc with kind: notebook); this doc is a #{kind}"}
+  end
+
+  defp resolve_frame(block, ws_id, ctx) do
+    cond do
+      # Both keys present is invalid — let Block.validate say so cleanly
+      # instead of creating/verifying a query for a doomed write.
+      Map.has_key?(block, "query_ref") and Map.has_key?(block, "query") ->
+        {:ok, block}
+
+      Map.has_key?(block, "query_ref") ->
+        resolve_chart_source(block, ws_id)
+
+      Map.has_key?(block, "query") ->
+        create_frame_query(block, ws_id, ctx)
+
+      true ->
+        {:ok, block}
+    end
+  end
+
+  defp create_frame_query(%{"query" => sql, "name" => name} = block, ws_id, ctx)
+       when is_binary(sql) and is_binary(name) do
+    attrs = %{name: name, sql: sql}
+
+    attrs =
+      case Map.get(block, "source") do
+        src when is_binary(src) and src != "" -> Map.put(attrs, :source, src)
+        _ -> attrs
+      end
+
+    case insert_frame_query(ws_id, attrs, ctx[:user_id]) do
+      {:ok, created_name} ->
+        {:ok, block |> Map.drop(["query", "source"]) |> Map.put("query_ref", created_name)}
+
+      {:error, code, msg} ->
+        {:error, code, msg}
+    end
+  end
+
+  # Missing/ill-typed name — leave it for Block.validate to reject.
+  defp create_frame_query(block, _ws_id, _ctx), do: {:ok, block}
+
+  # Create the catalog query, preferring the cell name; on collision step
+  # to a deterministic numeric suffix. Pre-check the name to avoid churning
+  # through changeset errors, and retry once past a lost create race.
+  defp insert_frame_query(ws_id, attrs, user_id) do
+    base = attrs.name |> to_string() |> String.trim() |> String.downcase()
+    do_insert_frame_query(ws_id, attrs, user_id, base, 0)
+  end
+
+  defp do_insert_frame_query(_ws_id, _attrs, _user_id, _base, attempt) when attempt > 100 do
+    {:error, :invalid_query, "could not find a free catalog query name for this frame cell"}
+  end
+
+  defp do_insert_frame_query(ws_id, attrs, user_id, base, attempt) do
+    candidate = frame_query_candidate(base, attempt)
+
+    case Aveline.DataSources.Queries.get_current_by_name(ws_id, candidate) do
+      nil ->
+        case Aveline.DataSources.Queries.create(ws_id, %{attrs | name: candidate}, user_id) do
+          {:ok, q} ->
+            {:ok, q.name}
+
+          {:error, :invalid_query, msg} ->
+            if String.contains?(msg, "already exists"),
+              do: do_insert_frame_query(ws_id, attrs, user_id, base, attempt + 1),
+              else: {:error, :invalid_query, msg}
+
+          {:error, code, msg} ->
+            {:error, code, msg}
+        end
+
+      _existing ->
+        do_insert_frame_query(ws_id, attrs, user_id, base, attempt + 1)
+    end
+  end
+
+  defp frame_query_candidate(base, 0), do: base
+
+  defp frame_query_candidate(base, n) do
+    suffix = "_#{n + 1}"
+    keep = max(0, 40 - String.length(suffix))
+    String.slice(base, 0, keep) <> suffix
+  end
 
   defp resolve_span_links(%{} = block, ws_id) do
     walk_spans(block, fn
@@ -1049,10 +1162,11 @@ defmodule Aveline.Docs do
         title: Map.get(update_attrs, :title, current.title),
         summary: Map.get(update_attrs, :summary, current.summary),
         tags: Map.get(update_attrs, :tags, current.tags),
-        # Slot + orientation carry across edits; neither is editable
+        # Slot + orientation + kind carry across edits; none is editable
         # through apply_ops.
         pin_slot: current.pin_slot,
         orientation: current.orientation,
+        kind: current.kind,
         owner_id: current.owner_id,
         actor_user_id: Map.fetch!(update_attrs, :actor_user_id),
         actor_type: actor_type,

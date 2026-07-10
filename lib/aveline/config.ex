@@ -22,4 +22,16 @@ defmodule Aveline.Config do
   Returns the session options for the application.
   """
   def session_options!, do: @session_options
+
+  @doc """
+  The deploy mode: `"local"` for a single-user Docker deployment, `"cloud"`
+  (the default) otherwise. Set from the `DEPLOY_MODE` env var in runtime.exs.
+  """
+  def deploy_mode, do: Application.get_env(:aveline, :deploy_mode, "cloud")
+
+  @doc """
+  True in a single-user local deployment (`DEPLOY_MODE=local`). Gates
+  first-boot seeding today; code-cell execution later.
+  """
+  def local_mode?, do: deploy_mode() == "local"
 end

@@ -18,6 +18,10 @@ defmodule Aveline.Application do
       Aveline.Repo,
       Aveline.DataSources.Cache,
       Aveline.DataSources.Engine.Semaphore,
+      # Notebook code-cell runtime: a registry keying one evaluation
+      # session per open notebook, and the DynamicSupervisor that owns them.
+      {Registry, keys: :unique, name: Aveline.Runtime.Registry},
+      Aveline.Runtime.SessionSupervisor,
       {Oban, Application.fetch_env!(:aveline, Oban)},
       {DNSCluster, query: Application.get_env(:aveline, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Aveline.PubSub},

@@ -15,6 +15,10 @@ services:
     env_file: .env
     environment:
       ERL_INETRC: /app/erl_inetrc
+      # Single-user deployment: first boot seeds a user + API token so
+      # `aveline login` needs no signup (token printed once in the logs).
+      # Set DEPLOY_MODE=cloud in .env for the multi-user, invite-based flow.
+      DEPLOY_MODE: ${DEPLOY_MODE:-local}
     volumes:
       - ./erl_inetrc:/app/erl_inetrc:ro
     ports:

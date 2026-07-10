@@ -28,4 +28,23 @@ defmodule Aveline.Broadcasts do
 
     :ok
   end
+
+  @doc """
+  Stream a notebook cell run to the doc's live viewers. Fired around
+  `Runs.run_cell`: `:cell_run_started` before the (possibly slow) run so a
+  second viewer shows a running state, `:cell_run_finished` once the run is
+  captured so viewers re-annotate the cell in place. Keyed by
+  `base_doc_id` — the same doc topic DocShowLive already subscribes to.
+
+  `payload` carries at least `:block_id`; `:base_doc_id` is stamped on so
+  subscribers can scope the update to their doc.
+  """
+  def publish_cell_run(event, %{base_doc_id: base}, payload)
+      when event in [:cell_run_started, :cell_run_finished] and is_map(payload) do
+    if Process.whereis(@pubsub) do
+      PubSub.broadcast(@pubsub, doc_topic(base), {event, Map.put(payload, :base_doc_id, base)})
+    end
+
+    :ok
+  end
 end
