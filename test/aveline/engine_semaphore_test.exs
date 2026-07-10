@@ -53,8 +53,12 @@ defmodule Aveline.DataSources.Engine.SemaphoreTest do
 
   defp eventually(fun, tries \\ 50) do
     cond do
-      fun.() -> true
-      tries <= 0 -> false
+      fun.() ->
+        true
+
+      tries <= 0 ->
+        false
+
       true ->
         Process.sleep(10)
         eventually(fun, tries - 1)

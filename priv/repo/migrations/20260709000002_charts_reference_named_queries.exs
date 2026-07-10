@@ -32,15 +32,20 @@ defmodule Aveline.Repo.Migrations.ChartsReferenceNamedQueries do
     # broadcast no-ops when it's down.
     ensure_vault!()
 
-    Repo.all(from w in "workspaces", select: type(w.id, Ecto.UUID))
+    Repo.all(from(w in "workspaces", select: type(w.id, Ecto.UUID)))
     |> Enum.each(&convert_workspace/1)
   end
 
   defp ensure_vault! do
     case Aveline.Vault.start_link() do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> raise "could not start Aveline.Vault for the chart migration: #{inspect(reason)}"
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        raise "could not start Aveline.Vault for the chart migration: #{inspect(reason)}"
     end
   end
 
@@ -52,10 +57,11 @@ defmodule Aveline.Repo.Migrations.ChartsReferenceNamedQueries do
     # during migrate).
     ws_base =
       Repo.one(
-        from d in DataSource,
+        from(d in DataSource,
           where:
             d.workspace_id == ^workspace_id and d.adapter == "workspace" and not d.superseded,
           select: d.base_data_source_id
+        )
       )
 
     workspace_id
@@ -66,9 +72,10 @@ defmodule Aveline.Repo.Migrations.ChartsReferenceNamedQueries do
   # A live source's name by base id — name only, no encrypted password.
   defp source_name(base_id) do
     Repo.one(
-      from d in DataSource,
+      from(d in DataSource,
         where: d.base_data_source_id == ^base_id and not d.superseded and is_nil(d.deleted_at),
         select: d.name
+      )
     )
   end
 
@@ -101,7 +108,10 @@ defmodule Aveline.Repo.Migrations.ChartsReferenceNamedQueries do
         # and then un-saveable). Check the return: a real failure must
         # abort the migration (and the deploy) loudly, never leave a doc
         # half-converted.
-        case Docs.replace_blocks(doc, cleaned, %{actor_user_id: doc.owner_id, actor_type: "human"},
+        case Docs.replace_blocks(
+               doc,
+               cleaned,
+               %{actor_user_id: doc.owner_id, actor_type: "human"},
                intent: "migrate inline charts to named catalog queries"
              ) do
           {:ok, _} -> :ok

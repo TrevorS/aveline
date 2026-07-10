@@ -85,8 +85,7 @@ defmodule Aveline.DataSources do
 
   def create(_workspace_id, name, _template, _password, _user_id)
       when name in ["derived", "workspace"] do
-    {:error, :reserved_name,
-     "#{inspect(name)} is reserved for the built-in catalog source — pick another"}
+    {:error, :reserved_name, "#{inspect(name)} is reserved for the built-in catalog source — pick another"}
   end
 
   def create(workspace_id, name, template, password, created_by_id)
@@ -120,8 +119,7 @@ defmodule Aveline.DataSources do
   id and scrubs the superseded row's secret in the same transaction.
   """
   def edit(%DataSource{adapter: "workspace"}, _changes, _user_id) do
-    {:error, :workspace_source_immutable,
-     "the workspace source is built in — it can't be renamed or repointed"}
+    {:error, :workspace_source_immutable, "the workspace source is built in — it can't be renamed or repointed"}
   end
 
   def edit(%DataSource{} = current, changes, user_id) when is_map(changes) do
@@ -135,12 +133,16 @@ defmodule Aveline.DataSources do
 
       true ->
         with {:ok, adapter} <- validate_template_or_invalid(template) do
-          insert_next_version(current, %{
-            name: Map.get(changes, :name, current.name),
-            adapter: adapter,
-            url_template: template,
-            password: Map.get(changes, :password, current.password)
-          }, user_id)
+          insert_next_version(
+            current,
+            %{
+              name: Map.get(changes, :name, current.name),
+              adapter: adapter,
+              url_template: template,
+              password: Map.get(changes, :password, current.password)
+            },
+            user_id
+          )
         end
     end
   end
@@ -181,8 +183,7 @@ defmodule Aveline.DataSources do
   password is gone for good. No restore — connect a new source.
   """
   def delete(%DataSource{adapter: "workspace"}, _user_id) do
-    {:error, :workspace_source_immutable,
-     "the workspace source is built in — it can't be deleted"}
+    {:error, :workspace_source_immutable, "the workspace source is built in — it can't be deleted"}
   end
 
   def delete(%DataSource{} = ds, user_id) do

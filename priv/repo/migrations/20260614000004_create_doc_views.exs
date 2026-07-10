@@ -4,7 +4,10 @@ defmodule Aveline.Repo.Migrations.CreateDocViews do
   def change do
     create table(:doc_views, primary_key: false) do
       add :id, :binary_id, primary_key: true
-      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all), null: false
+
+      add :workspace_id, references(:workspaces, type: :binary_id, on_delete: :delete_all),
+        null: false
+
       # base_doc_id is the logical doc id (stable across versions). We
       # intentionally don't reference a specific Doc version row, since
       # versions can be soft-deleted as part of supersede.

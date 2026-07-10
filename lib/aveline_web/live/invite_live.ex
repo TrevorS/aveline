@@ -154,9 +154,15 @@ defmodule AvelineWeb.InviteLive do
       |> String.downcase()
 
     cond do
-      username == "" -> {username, nil}
-      String.length(username) < 2 -> {username, "Too short (minimum 2 characters)."}
-      String.length(username) > 60 -> {username, "Too long (max 60 characters)."}
+      username == "" ->
+        {username, nil}
+
+      String.length(username) < 2 ->
+        {username, "Too short (minimum 2 characters)."}
+
+      String.length(username) > 60 ->
+        {username, "Too long (max 60 characters)."}
+
       not Regex.match?(~r/^[a-z0-9][a-z0-9-]*$/, username) ->
         {username, "Use lowercase letters, digits, and hyphens. Must start with a letter or digit."}
 
@@ -354,5 +360,4 @@ defmodule AvelineWeb.InviteLive do
     </div>
     """
   end
-
 end

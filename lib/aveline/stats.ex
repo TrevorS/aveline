@@ -154,8 +154,7 @@ defmodule Aveline.Stats do
     from(c in Comment,
       join: d in Doc,
       on: d.id == c.doc_id,
-      where:
-        d.workspace_id == ^ws_id and c.actor_user_id == ^user_id and is_nil(c.deleted_at)
+      where: d.workspace_id == ^ws_id and c.actor_user_id == ^user_id and is_nil(c.deleted_at)
     )
     |> Repo.aggregate(:count, :id)
   end

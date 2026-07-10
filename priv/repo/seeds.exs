@@ -148,6 +148,7 @@ b = fn text, marks -> %{"text" => text, "marks" => marks} end
 para = fn spans -> %{"type" => "paragraph", "content" => spans} end
 heading = fn level, text -> %{"type" => "heading", "level" => level, "text" => text} end
 code = fn lang, content -> %{"type" => "code", "language" => lang, "content" => content} end
+
 ul = fn items ->
   %{
     "type" => "list",
@@ -155,6 +156,7 @@ ul = fn items ->
     "items" => Enum.map(items, fn spans -> %{"content" => spans} end)
   }
 end
+
 ol = fn items ->
   %{
     "type" => "list",
@@ -162,10 +164,12 @@ ol = fn items ->
     "items" => Enum.map(items, fn spans -> %{"content" => spans} end)
   }
 end
+
 # Slug form — the server resolves `doc` to the target's base_doc_id.
 doc_link = fn slug, note ->
   %{"type" => "doc_link", "doc" => slug, "note" => [%{"text" => note}]}
 end
+
 # Inline mention: a span linking another doc from inside prose. Same
 # slug resolution as doc_link blocks; the text stays the author's words.
 mention = fn text, slug -> %{"text" => text, "link" => %{"doc" => slug}} end
@@ -240,11 +244,15 @@ doc_specs = [
     blocks: [
       heading.(2, "Phoenix LiveView over a separate SPA"),
       para.([
-        t.("The web UI is the secondary surface — agents are primary. Real-time threading + form-heavy is LiveView's bullseye, and same-origin removes the cookie/CSRF/CORS pain a React client would add.")
+        t.(
+          "The web UI is the secondary surface — agents are primary. Real-time threading + form-heavy is LiveView's bullseye, and same-origin removes the cookie/CSRF/CORS pain a React client would add."
+        )
       ]),
       heading.(2, "Block format over markdown"),
       para.([
-        t.("Notes are stored as structured blocks, not markdown. Lets us diff at the block level, link to specific paragraphs, attach metadata per block, and represent agent intent. Markdown is a substrate for human authoring; we serve a different need.")
+        t.(
+          "Notes are stored as structured blocks, not markdown. Lets us diff at the block level, link to specific paragraphs, attach metadata per block, and represent agent intent. Markdown is a substrate for human authoring; we serve a different need."
+        )
       ])
     ]
   },
@@ -257,7 +265,9 @@ doc_specs = [
     blocks: [
       heading.(2, "1. Acknowledge"),
       para.([
-        t.("Open the alert in Sentry. Click Acknowledge. Drop a note in #aveline-oncall so the other oncall knows you're on it.")
+        t.(
+          "Open the alert in Sentry. Click Acknowledge. Drop a note in #aveline-oncall so the other oncall knows you're on it."
+        )
       ]),
       heading.(2, "2. Triage"),
       ol.([
@@ -301,7 +311,10 @@ doc_specs = [
         [t.("Postgres 15+")]
       ]),
       heading.(2, "Backend"),
-      code.("sh", "git clone git@github.com:aveline-ai/aveline.git\ncd aveline\nmix deps.get\nmix ecto.setup\nmix phx.server"),
+      code.(
+        "sh",
+        "git clone git@github.com:aveline-ai/aveline.git\ncd aveline\nmix deps.get\nmix ecto.setup\nmix phx.server"
+      ),
       para.([t.("The seed task prints three local tokens (alice / bob / carol).")])
     ]
   },
@@ -361,65 +374,89 @@ doc_specs = [
         t.("One snippet per common language. Useful as a visual regression check when the block renderer changes.")
       ]),
       heading.(2, "Elixir"),
-      code.("elixir", """
-      defmodule Aveline.Blocks.Document do
-        def apply_ops(blocks, ops) do
-          Enum.reduce_while(ops, {:ok, blocks}, fn op, {:ok, acc} ->
-            case apply_op(acc, op) do
-              {:ok, next} -> {:cont, {:ok, next}}
-              err -> {:halt, err}
-            end
-          end)
+      code.(
+        "elixir",
+        """
+        defmodule Aveline.Blocks.Document do
+          def apply_ops(blocks, ops) do
+            Enum.reduce_while(ops, {:ok, blocks}, fn op, {:ok, acc} ->
+              case apply_op(acc, op) do
+                {:ok, next} -> {:cont, {:ok, next}}
+                err -> {:halt, err}
+              end
+            end)
+          end
         end
-      end
-      """ |> String.trim()),
+        """
+        |> String.trim()
+      ),
       heading.(2, "JavaScript"),
-      code.("javascript", """
-      const Hooks = {
-        ResetOnEvent: {
-          mounted() {
-            const evt = this.el.dataset.resetEvent || "reset-form"
-            window.addEventListener(`phx:${evt}`, () => this.el.reset())
+      code.(
+        "javascript",
+        """
+        const Hooks = {
+          ResetOnEvent: {
+            mounted() {
+              const evt = this.el.dataset.resetEvent || "reset-form"
+              window.addEventListener(`phx:${evt}`, () => this.el.reset())
+            }
           }
         }
-      }
-      """ |> String.trim()),
+        """
+        |> String.trim()
+      ),
       heading.(2, "SQL"),
-      code.("sql", """
-      SELECT i.title, i.version_number, i.intent
-      FROM docs i
-      WHERE i.base_doc_id = $1
-      ORDER BY i.version_number DESC
-      LIMIT 10;
-      """ |> String.trim()),
+      code.(
+        "sql",
+        """
+        SELECT i.title, i.version_number, i.intent
+        FROM docs i
+        WHERE i.base_doc_id = $1
+        ORDER BY i.version_number DESC
+        LIMIT 10;
+        """
+        |> String.trim()
+      ),
       heading.(2, "Python"),
-      code.("python", """
-      from anthropic import Anthropic
+      code.(
+        "python",
+        """
+        from anthropic import Anthropic
 
-      client = Anthropic()
+        client = Anthropic()
 
-      response = client.messages.create(
-          model="claude-opus-4-7",
-          max_tokens=1024,
-          messages=[{"role": "user", "content": "summarize this note"}],
-      )
-      print(response.content[0].text)
-      """ |> String.trim()),
+        response = client.messages.create(
+            model="claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "summarize this note"}],
+        )
+        print(response.content[0].text)
+        """
+        |> String.trim()
+      ),
       heading.(2, "Shell"),
-      code.("sh", """
-      curl -s http://localhost:4000/api/heartbeat \\
-        -H "Authorization: Bearer avl_..." \\
-        | jq .
-      """ |> String.trim()),
+      code.(
+        "sh",
+        """
+        curl -s http://localhost:4000/api/heartbeat \\
+          -H "Authorization: Bearer avl_..." \\
+          | jq .
+        """
+        |> String.trim()
+      ),
       heading.(2, "Plain (no language)"),
-      code.(nil, """
-      Just some plain text without a language label.
-      Useful for ASCII diagrams or arbitrary fixed-width content.
+      code.(
+        nil,
+        """
+        Just some plain text without a language label.
+        Useful for ASCII diagrams or arbitrary fixed-width content.
 
-        +------+    +------+
-        | item | -> | item |
-        +------+    +------+
-      """ |> String.trim())
+          +------+    +------+
+          | item | -> | item |
+          +------+    +------+
+        """
+        |> String.trim()
+      )
     ]
   }
 ]
@@ -440,10 +477,30 @@ end
 doc_specs =
   doc_specs ++
     [
-      issue.("Kanban: drag & drop in the web", "Web is read-only for now (humans comment); revisit if pointing at cards ever beats asking your agent.", carol, "backlog"),
-      issue.("Kanban: board block inside worklogs", "Embed a feature's own board under its worklog prose. Should already work — verify and demo it.", bob, "todo"),
-      issue.("Kanban: ship boards-as-docs", "board block + scoped status tags + the Boards directory tab.", alice, "in-progress"),
-      issue.("Kanban: settle the tag model", "Scoped tags (status:todo) with per-scope exclusivity. Decided.", alice, "done"),
+      issue.(
+        "Kanban: drag & drop in the web",
+        "Web is read-only for now (humans comment); revisit if pointing at cards ever beats asking your agent.",
+        carol,
+        "backlog"
+      ),
+      issue.(
+        "Kanban: board block inside worklogs",
+        "Embed a feature's own board under its worklog prose. Should already work — verify and demo it.",
+        bob,
+        "todo"
+      ),
+      issue.(
+        "Kanban: ship boards-as-docs",
+        "board block + scoped status tags + the Boards directory tab.",
+        alice,
+        "in-progress"
+      ),
+      issue.(
+        "Kanban: settle the tag model",
+        "Scoped tags (status:todo) with per-scope exclusivity. Decided.",
+        alice,
+        "done"
+      ),
       %{
         slug: "kanban-feature-notes",
         title: "Kanban feature — notes",
@@ -614,18 +671,43 @@ current = fn slug ->
 end
 
 thread_specs = [
-  %{doc: "stack-overview", author: "bob", actor: "human",
-    body: "Worth noting: keep an eye on pool utilization in the managed PG dashboard. If we ever start sitting near the cap during peak, that's the upgrade signal."},
-  %{doc: "stack-overview", author: "alice", actor: "agent",
-    body: "Good call. Worth adding to architecture-decisions when we make the call to upgrade."},
-  %{doc: "stack-overview", author: "carol", actor: "human",
-    body: "Reading this on my first day — super helpful, thanks."},
-  %{doc: "oncall-runbook", author: "alice", actor: "human",
-    body: "Reminder: the page button in Sentry now defaults to ALL responders. Be specific about who you're paging."},
-  %{doc: "oncall-runbook", author: "bob", actor: "agent",
-    body: "Added an escalation section in v2 and tightened the SLA in v3 — see history."},
-  %{doc: "deploy-guide", author: "carol", actor: "human",
-    body: "Does the pre-flight need to include mix dialyzer? Or is that overkill for v0?"}
+  %{
+    doc: "stack-overview",
+    author: "bob",
+    actor: "human",
+    body:
+      "Worth noting: keep an eye on pool utilization in the managed PG dashboard. If we ever start sitting near the cap during peak, that's the upgrade signal."
+  },
+  %{
+    doc: "stack-overview",
+    author: "alice",
+    actor: "agent",
+    body: "Good call. Worth adding to architecture-decisions when we make the call to upgrade."
+  },
+  %{
+    doc: "stack-overview",
+    author: "carol",
+    actor: "human",
+    body: "Reading this on my first day — super helpful, thanks."
+  },
+  %{
+    doc: "oncall-runbook",
+    author: "alice",
+    actor: "human",
+    body: "Reminder: the page button in Sentry now defaults to ALL responders. Be specific about who you're paging."
+  },
+  %{
+    doc: "oncall-runbook",
+    author: "bob",
+    actor: "agent",
+    body: "Added an escalation section in v2 and tightened the SLA in v3 — see history."
+  },
+  %{
+    doc: "deploy-guide",
+    author: "carol",
+    actor: "human",
+    body: "Does the pre-flight need to include mix dialyzer? Or is that overkill for v0?"
+  }
 ]
 
 Enum.each(thread_specs, fn spec ->
@@ -727,7 +809,8 @@ case Repo.one(
          on: d.id == c.doc_id,
          where:
            d.slug == "stack-overview" and
-             c.body == "Worth noting: keep an eye on pool utilization in the managed PG dashboard. If we ever start sitting near the cap during peak, that's the upgrade signal." and
+             c.body ==
+               "Worth noting: keep an eye on pool utilization in the managed PG dashboard. If we ever start sitting near the cap during peak, that's the upgrade signal." and
              is_nil(c.resolved_at) and is_nil(c.deleted_at) and not c.superseded,
          limit: 1
      ) do
@@ -820,8 +903,7 @@ if arch && arch.version_number == 1 do
     (block_with_c1["content"] || []) ++
       [
         %{
-          "text" =>
-            " (Diagram placeholder: replace with a real ASCII flow next pass.)",
+          "text" => " (Diagram placeholder: replace with a real ASCII flow next pass.)",
           "marks" => ["italic"]
         }
       ]
@@ -842,8 +924,7 @@ if arch && arch.version_number == 1 do
         %{
           "comment_id" => c1.base_comment_id,
           "action" => "resolve",
-          "reply" =>
-            "Added a placeholder. Will fill in a real diagram on the next pass."
+          "reply" => "Added a placeholder. Will fill in a real diagram on the next pass."
         }
       ]
     )
@@ -882,9 +963,24 @@ end
 
 chart = fn name, viz -> %{"type" => "chart", "query_ref" => name, "viz" => viz} end
 
-mk_query.("versions_per_day", "aveline-self", "SELECT inserted_at::date AS day, count(*) AS versions FROM docs GROUP BY 1 ORDER BY 1")
-mk_query.("versions_by_actor", "aveline-self", "SELECT actor_type, count(*) AS versions FROM docs GROUP BY 1 ORDER BY 2 DESC")
-mk_query.("most_versioned_docs", "aveline-self", "SELECT title, max(version_number) AS versions FROM docs WHERE NOT superseded GROUP BY title ORDER BY 2 DESC LIMIT 5")
+mk_query.(
+  "versions_per_day",
+  "aveline-self",
+  "SELECT inserted_at::date AS day, count(*) AS versions FROM docs GROUP BY 1 ORDER BY 1"
+)
+
+mk_query.(
+  "versions_by_actor",
+  "aveline-self",
+  "SELECT actor_type, count(*) AS versions FROM docs GROUP BY 1 ORDER BY 2 DESC"
+)
+
+mk_query.(
+  "most_versioned_docs",
+  "aveline-self",
+  "SELECT title, max(version_number) AS versions FROM docs WHERE NOT superseded GROUP BY title ORDER BY 2 DESC LIMIT 5"
+)
+
 mk_query.("broken_showcase", "aveline-self", "SELECT nope FROM does_not_exist")
 
 if is_nil(Docs.get_current_by_slug(workspace.id, "metrics-dashboard")) do
@@ -950,9 +1046,24 @@ end)
 # Each chart is a view over a named derived query (named-only charts).
 mk_query.("docs_vs_comments", nil, "SELECT day, docs, comments FROM activity_per_day ORDER BY day")
 mk_query.("docs_ma3", nil, "SELECT day, docs, docs_ma3 FROM activity_trend ORDER BY day")
-mk_query.("docs_with_fit", nil, "SELECT day, docs, regr_slope(docs, epoch(day::timestamp)) OVER () * epoch(day::timestamp) + regr_intercept(docs, epoch(day::timestamp)) OVER () AS fit FROM activity_per_day ORDER BY day")
-mk_query.("docs_forecast", nil, "WITH pts AS (SELECT day, docs FROM activity_per_day), model AS (SELECT regr_slope(docs, epoch(day::timestamp)) AS m, regr_intercept(docs, epoch(day::timestamp)) AS b FROM pts), axis AS (SELECT unnest(generate_series((SELECT min(day) FROM pts), (SELECT max(day) FROM pts) + INTERVAL 7 DAY, INTERVAL 1 DAY))::date AS day) SELECT a.day, p.docs AS actual, round(m.m * epoch(a.day::timestamp) + m.b, 2) AS forecast FROM axis a CROSS JOIN model m LEFT JOIN pts p ON p.day = a.day ORDER BY a.day")
-mk_query.("docs_trend_slope", nil, "SELECT round(regr_slope(docs, epoch(day::timestamp)) * 86400, 4) AS docs_per_day_trend FROM activity_per_day")
+
+mk_query.(
+  "docs_with_fit",
+  nil,
+  "SELECT day, docs, regr_slope(docs, epoch(day::timestamp)) OVER () * epoch(day::timestamp) + regr_intercept(docs, epoch(day::timestamp)) OVER () AS fit FROM activity_per_day ORDER BY day"
+)
+
+mk_query.(
+  "docs_forecast",
+  nil,
+  "WITH pts AS (SELECT day, docs FROM activity_per_day), model AS (SELECT regr_slope(docs, epoch(day::timestamp)) AS m, regr_intercept(docs, epoch(day::timestamp)) AS b FROM pts), axis AS (SELECT unnest(generate_series((SELECT min(day) FROM pts), (SELECT max(day) FROM pts) + INTERVAL 7 DAY, INTERVAL 1 DAY))::date AS day) SELECT a.day, p.docs AS actual, round(m.m * epoch(a.day::timestamp) + m.b, 2) AS forecast FROM axis a CROSS JOIN model m LEFT JOIN pts p ON p.day = a.day ORDER BY a.day"
+)
+
+mk_query.(
+  "docs_trend_slope",
+  nil,
+  "SELECT round(regr_slope(docs, epoch(day::timestamp)) * 86400, 4) AS docs_per_day_trend FROM activity_per_day"
+)
 
 if is_nil(Docs.get_current_by_slug(workspace.id, "catalog-dashboard")) do
   {:ok, _dash} =
@@ -963,7 +1074,8 @@ if is_nil(Docs.get_current_by_slug(workspace.id, "catalog-dashboard")) do
       actor_type: "agent",
       slug: "catalog-dashboard",
       title: "Catalog dashboard (workspace source)",
-      summary: "Charts over the query catalog: a cross-query join and a rolling trend + regression, composed in the analytics engine.",
+      summary:
+        "Charts over the query catalog: a cross-query join and a rolling trend + regression, composed in the analytics engine.",
       tags: ["product"],
       intent: "seed a workspace-source chart showcase over the query catalog",
       blocks: [
@@ -977,9 +1089,17 @@ if is_nil(Docs.get_current_by_slug(workspace.id, "catalog-dashboard")) do
           t.(" chains on top with a moving average and a regression slope the source can't express.")
         ]),
         heading.(2, "Docs vs comments per day (cross-query join)"),
-        chart.("docs_vs_comments", %{"type" => "combo", "x" => "day", "series" => [%{"y" => "docs", "type" => "line"}, %{"y" => "comments", "type" => "bar"}]}),
+        chart.("docs_vs_comments", %{
+          "type" => "combo",
+          "x" => "day",
+          "series" => [%{"y" => "docs", "type" => "line"}, %{"y" => "comments", "type" => "bar"}]
+        }),
         heading.(2, "Docs per day with 3-day moving average (chained derived query)"),
-        chart.("docs_ma3", %{"type" => "combo", "x" => "day", "series" => [%{"y" => "docs", "type" => "bar"}, %{"y" => "docs_ma3", "type" => "line"}]}),
+        chart.("docs_ma3", %{
+          "type" => "combo",
+          "x" => "day",
+          "series" => [%{"y" => "docs", "type" => "bar"}, %{"y" => "docs_ma3", "type" => "line"}]
+        }),
         heading.(2, "Docs per day with a fitted regression line"),
         para.([
           t.("The "),
@@ -988,7 +1108,11 @@ if is_nil(Docs.get_current_by_slug(workspace.id, "catalog-dashboard")) do
           b.("regr_slope(y, x) OVER () * x + regr_intercept(y, x) OVER ()", ["code"]),
           t.(". Plotted as a line over the actual bars. The source dialect can't do this; the engine can.")
         ]),
-        chart.("docs_with_fit", %{"type" => "combo", "x" => "day", "series" => [%{"y" => "docs", "type" => "bar"}, %{"y" => "fit", "type" => "line"}]}),
+        chart.("docs_with_fit", %{
+          "type" => "combo",
+          "x" => "day",
+          "series" => [%{"y" => "docs", "type" => "bar"}, %{"y" => "fit", "type" => "line"}]
+        }),
         heading.(2, "7-day forecast (regression extended past the data)"),
         para.([
           t.("The fit line evaluated at future dates the data doesn't have: "),
@@ -997,9 +1121,15 @@ if is_nil(Docs.get_current_by_slug(workspace.id, "catalog-dashboard")) do
           b.("actual", ["code"]),
           t.(" stops at the last real day; "),
           b.("forecast", ["code"]),
-          t.(" runs 7 days past it. (Linear extrapolation of a steep toy trend dives negative fast — that's the math, not a bug.)")
+          t.(
+            " runs 7 days past it. (Linear extrapolation of a steep toy trend dives negative fast — that's the math, not a bug.)"
+          )
         ]),
-        chart.("docs_forecast", %{"type" => "combo", "x" => "day", "series" => [%{"y" => "actual", "type" => "bar"}, %{"y" => "forecast", "type" => "line"}]}),
+        chart.("docs_forecast", %{
+          "type" => "combo",
+          "x" => "day",
+          "series" => [%{"y" => "actual", "type" => "bar"}, %{"y" => "forecast", "type" => "line"}]
+        }),
         heading.(2, "Ad-hoc: regression slope over the catalog (table)"),
         chart.("docs_trend_slope", %{"type" => "table"})
       ]
@@ -1100,8 +1230,15 @@ Enum.each(users, fn {spec, _} ->
 end)
 
 IO.puts("")
-IO.puts("Docs: #{length(doc_specs)} + onboarding-story (doc_link chain); stack-overview at v2, oncall-runbook at v3, architecture-decisions at v2 w/ showcase")
-IO.puts("Comments: open + resolved + edited + deleted showcased on architecture-decisions; basic threads on three other docs.")
+
+IO.puts(
+  "Docs: #{length(doc_specs)} + onboarding-story (doc_link chain); stack-overview at v2, oncall-runbook at v3, architecture-decisions at v2 w/ showcase"
+)
+
+IO.puts(
+  "Comments: open + resolved + edited + deleted showcased on architecture-decisions; basic threads on three other docs."
+)
+
 events_count = Repo.aggregate(Aveline.Events.Event, :count, :id)
 IO.puts("Activity events: #{events_count} (all action types covered)")
 IO.puts("")

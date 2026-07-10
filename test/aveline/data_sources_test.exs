@@ -364,7 +364,9 @@ defmodule Aveline.DataSourcesTest do
 
     test "query_ref is required and must be a query name; inline SQL is rejected" do
       assert {:error, msg} =
-               Block.validate(%{"type" => "chart", "data_source_id" => Ecto.UUID.generate(), "query" => "select 1"}, mint_id?: true)
+               Block.validate(%{"type" => "chart", "data_source_id" => Ecto.UUID.generate(), "query" => "select 1"},
+                 mint_id?: true
+               )
 
       assert msg =~ "query_ref"
 

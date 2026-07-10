@@ -49,8 +49,6 @@ defmodule Aveline.Repo.Migrations.CreateDocs do
     execute "CREATE INDEX docs_tags_gin_index ON docs USING GIN (tags)",
             "DROP INDEX docs_tags_gin_index"
 
-    create constraint(:docs, :actor_type_valid,
-             check: "actor_type IN ('human', 'agent')"
-           )
+    create constraint(:docs, :actor_type_valid, check: "actor_type IN ('human', 'agent')")
   end
 end

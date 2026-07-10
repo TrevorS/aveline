@@ -23,7 +23,10 @@ defmodule AvelineWeb.DataSourcesLiveTest do
     owner = Fixtures.user_fixture()
     ws = Fixtures.workspace_fixture(owner)
     {:ok, _src} = DataSources.create(ws.id, "self", self_template(), self_password(), owner.id)
-    {:ok, _} = Queries.create(ws.id, %{name: "docs_ct", source: "self", sql: "select count(*) AS n FROM docs"}, owner.id)
+
+    {:ok, _} =
+      Queries.create(ws.id, %{name: "docs_ct", source: "self", sql: "select count(*) AS n FROM docs"}, owner.id)
+
     {:ok, _} = Queries.create(ws.id, %{name: "docs_view", sql: "select n FROM docs_ct"}, owner.id)
 
     conn = conn |> Plug.Test.init_test_session(%{}) |> Plug.Conn.put_session(:user_id, owner.id)

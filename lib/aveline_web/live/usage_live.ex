@@ -53,6 +53,7 @@ defmodule AvelineWeb.UsageLive do
   @impl true
   def handle_event("sort", %{"by" => by}, socket) do
     col = String.to_existing_atom(by)
+
     {new_by, new_dir} =
       if socket.assigns.sort_by == col do
         # Toggle direction when clicking the same column.
@@ -242,7 +243,6 @@ defmodule AvelineWeb.UsageLive do
     """
   end
 
-
   attr :label, :string, required: true
   attr :value, :integer, required: true
   attr :accent, :boolean, default: false
@@ -259,7 +259,6 @@ defmodule AvelineWeb.UsageLive do
     </div>
     """
   end
-
 
   # Compact number formatter — "1,234" or "12.3k" for big values so cards stay readable.
   defp format_number(n) when n < 1000, do: Integer.to_string(n)

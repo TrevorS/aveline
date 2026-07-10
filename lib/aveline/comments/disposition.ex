@@ -56,10 +56,10 @@ defmodule Aveline.Comments.Disposition do
   deleted-block constraints.
   """
   def cast(%{} = raw) do
-    with {:ok, id}     <- fetch_string(raw, "comment_id"),
+    with {:ok, id} <- fetch_string(raw, "comment_id"),
          {:ok, action} <- fetch_action(raw),
          {:ok, anchor} <- fetch_anchor(action, raw),
-         {:ok, reply}  <- fetch_reply(action, raw) do
+         {:ok, reply} <- fetch_reply(action, raw) do
       {:ok,
        %__MODULE__{
          comment_id: id,
@@ -142,7 +142,7 @@ defmodule Aveline.Comments.Disposition do
     Enum.reduce_while(dispositions, {:ok, 0}, fn d, {:ok, n} ->
       case do_apply(repo, d, now, agent_user_id, new_doc_id) do
         {:ok, _} -> {:cont, {:ok, n + 1}}
-        :ok      -> {:cont, {:ok, n + 1}}
+        :ok -> {:cont, {:ok, n + 1}}
         {:error, e} -> {:halt, {:error, e}}
       end
     end)
