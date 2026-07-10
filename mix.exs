@@ -43,6 +43,15 @@ defmodule Aveline.MixProject do
       {:telemetry_metrics, "~> 1.1"},
       {:telemetry_poller, "~> 1.1"},
       {:gettext, "~> 0.26"},
+      # 0.11.x accepts decimal ~> 2.1 (ecto/postgrex pin decimal ~> 2.0);
+      # 0.12 requires decimal ~> 3.1 and would force an ecto upgrade.
+      {:explorer, "~> 0.11.0"},
+      # ML + stats toolkit for code cells: Nx (tensors, BinaryBackend — no
+      # native XLA), Scholar (regression/clustering/PCA/metrics/stats),
+      # Statistics (pure-Elixir descriptive stats + distributions).
+      {:nx, "~> 0.9"},
+      {:scholar, "~> 0.4"},
+      {:statistics, "~> 0.6"},
       {:jason, "~> 1.4"},
       {:dns_cluster, "~> 0.2"},
       {:bandit, "~> 1.6"},
